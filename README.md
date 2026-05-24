@@ -1,6 +1,6 @@
 # Cognithor Frontend
 
-This is the official GUI for [Project Cognithor](https://github.com/TomiWebPro/Cognithorin) — a unified gateway for routing requests to multiple LLM providers (OpenAI, Anthropic, OpenRouter, Ollama, and custom endpoints).
+This is the official GUI for [Project Cognithor](https://github.com/TomiWebPro/Cognithor) — a unified gateway for routing requests to multiple LLM providers (OpenAI, Anthropic, OpenRouter, Ollama, and custom endpoints).
 
 Built with Flutter.
 
