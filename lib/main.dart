@@ -23,6 +23,10 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
+    _backendService.setApiClient(_apiClient);
+    _backendService.onReconnected = () {
+      if (mounted) setState(() {});
+    };
     _init();
   }
 
@@ -30,9 +34,26 @@ class _MyAppState extends State<MyApp> {
     await _backendService.loadSavedUrl();
     if (_backendService.savedUrl != null) {
       _apiClient.setBaseUrl(_backendService.savedUrl!);
-      final ok = await _backendService.tryConnect(_backendService.savedUrl!);
-      if (ok) {
-        _backendService.startMonitoring();
+
+      final creds = await _backendService.loadCredentials();
+      if (creds.$1 != null && creds.$2 != null) {
+        final ok = await _backendService.tryConnect(
+          _backendService.savedUrl!,
+          username: creds.$1,
+          password: creds.$2,
+        );
+        if (ok) {
+          _apiClient.setToken(_backendService.token);
+          _backendService.startMonitoring();
+          if (!mounted) return;
+          setState(() => _ready = true);
+          return;
+        }
+      } else {
+        final ok = await _backendService.tryConnect(_backendService.savedUrl!);
+        if (ok) {
+          _backendService.startMonitoring();
+        }
       }
     }
     if (!mounted) return;

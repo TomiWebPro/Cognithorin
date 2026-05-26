@@ -196,6 +196,7 @@ class _ConnectContentState extends State<ConnectContent> {
         _detectedUrl = url;
         if (creds != null) {
           widget.backendService.saveUrl(url);
+          widget.backendService.saveCredentials(creds.$1, creds.$2);
           widget.apiClient.setBaseUrl(url);
           widget.apiClient.setToken(widget.backendService.token);
           widget.onConnected();
@@ -228,6 +229,7 @@ class _ConnectContentState extends State<ConnectContent> {
 
     if (token != null) {
       widget.backendService.setToken(token);
+      widget.backendService.saveCredentials(username, password);
       widget.apiClient.setToken(token);
       await widget.backendService.saveUrl(url);
       if (!mounted) return;

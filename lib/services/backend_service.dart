@@ -4,6 +4,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import 'api_service/api_client.dart';
 
 class BackendInfo {
   final String message;
@@ -74,6 +77,9 @@ enum ConnectionStatus { disconnected, connecting, connected, failed }
 
 class BackendConnectionService extends ChangeNotifier {
   static const _keySavedUrl = 'backend_url';
+  static const _keySecureUsername = 'secure_username';
+  static const _keySecurePassword = 'secure_password';
+  static const _keySecureToken = 'secure_token';
   static const _defaultUrls = [
     'http://localhost:4464',
     'http://localhost:8000',
@@ -89,6 +95,9 @@ class BackendConnectionService extends ChangeNotifier {
   BackendInfo? _backendInfo;
   String? _error;
   String? _token;
+  final _secureStorage = const FlutterSecureStorage();
+  ApiClient? _apiClient;
+  void Function()? onReconnected;
 
   String? get savedUrl => _savedUrl;
   String? get currentUrl => _currentUrl;
@@ -97,9 +106,46 @@ class BackendConnectionService extends ChangeNotifier {
   String? get error => _error;
   bool get isConnected => _status == ConnectionStatus.connected;
   String? get token => _token;
+  void setApiClient(ApiClient client) {
+    _apiClient = client;
+    client.onUnauthorized = () {
+      _tryRecover().then((recovered) {
+        if (!recovered) {
+          _status = ConnectionStatus.disconnected;
+          _error = 'Authentication failed';
+          notifyListeners();
+        }
+      });
+    };
+  }
 
   void setToken(String? token) {
     _token = token;
+  }
+
+  Future<void> saveCredentials(String username, String password) async {
+    await _secureStorage.write(key: _keySecureUsername, value: username);
+    await _secureStorage.write(key: _keySecurePassword, value: password);
+  }
+
+  Future<(String?, String?)> loadCredentials() async {
+    final username = await _secureStorage.read(key: _keySecureUsername);
+    final password = await _secureStorage.read(key: _keySecurePassword);
+    return (username, password);
+  }
+
+  Future<void> saveToken(String token) async {
+    await _secureStorage.write(key: _keySecureToken, value: token);
+  }
+
+  Future<String?> loadToken() async {
+    return await _secureStorage.read(key: _keySecureToken);
+  }
+
+  Future<void> clearCredentials() async {
+    await _secureStorage.delete(key: _keySecureUsername);
+    await _secureStorage.delete(key: _keySecurePassword);
+    await _secureStorage.delete(key: _keySecureToken);
   }
 
   Future<void> loadSavedUrl() async {
@@ -211,7 +257,7 @@ class BackendConnectionService extends ChangeNotifier {
   }
 
   Future<void> _checkHealth() async {
-    if (_currentUrl == null || _status != ConnectionStatus.connected) return;
+    if (_currentUrl == null) return;
 
     try {
       final healthUri = Uri.parse('$_currentUrl/health');
@@ -220,27 +266,98 @@ class BackendConnectionService extends ChangeNotifier {
       );
 
       if (healthResponse.statusCode != 200) {
-        _setDisconnected();
+        if (_status == ConnectionStatus.connected) {
+          _setDisconnected();
+        }
         return;
       }
 
-      final authUri = Uri.parse('$_currentUrl/users/me');
-      final headers = <String, String>{
-        'Content-Type': 'application/json',
-      };
-      if (_token != null) {
-        headers['Authorization'] = 'Bearer $_token';
-      }
-      final authResponse = await http.get(authUri, headers: headers).timeout(
-        const Duration(seconds: 3),
-      );
-
-      if (authResponse.statusCode != 200) {
-        _setDisconnected();
+      if (_token == null) {
         return;
+      }
+
+      try {
+        final authUri = Uri.parse('$_currentUrl/users/me');
+        final authResponse = await http.get(
+          authUri,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $_token',
+          },
+        ).timeout(const Duration(seconds: 3));
+
+        if (authResponse.statusCode == 200) {
+          if (_status != ConnectionStatus.connected) {
+            _status = ConnectionStatus.connected;
+            _error = null;
+            notifyListeners();
+          }
+        } else if (authResponse.statusCode == 401) {
+          final recovered = await _tryRecover();
+          if (!recovered) {
+            _error = 'Authentication lost';
+            if (_status == ConnectionStatus.connected) {
+              _status = ConnectionStatus.disconnected;
+              notifyListeners();
+            }
+          }
+        } else {
+          _error = 'API error: ${authResponse.statusCode}';
+          if (_status == ConnectionStatus.connected) {
+            _setDisconnected();
+          }
+        }
+      } on Exception catch (_) {
+        if (_status == ConnectionStatus.connected) {
+          _setDisconnected();
+        }
       }
     } catch (_) {
-      _setDisconnected();
+      if (_status == ConnectionStatus.connected) {
+        _setDisconnected();
+      }
+    }
+  }
+
+  Future<bool> _tryRecover() async {
+    final creds = await loadCredentials();
+    final username = creds.$1;
+    final password = creds.$2;
+    if (username == null || password == null || _currentUrl == null) {
+      return false;
+    }
+
+    try {
+      final uri = Uri.parse('$_currentUrl/token');
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password}),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode != 200) return false;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final newToken = data['access_token'] as String?;
+      if (newToken == null) return false;
+
+      _token = newToken;
+      await saveToken(newToken);
+      _apiClient?.setToken(newToken);
+
+      try {
+        await _apiClient!.get('/users/me');
+      } on ApiException {
+        return false;
+      }
+
+      _status = ConnectionStatus.connected;
+      _error = null;
+      notifyListeners();
+      onReconnected?.call();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -259,7 +376,11 @@ class BackendConnectionService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
-        return data['access_token'] as String?;
+        final token = data['access_token'] as String?;
+        if (token != null) {
+          await saveToken(token);
+        }
+        return token;
       }
       return null;
     } catch (_) {
@@ -269,11 +390,13 @@ class BackendConnectionService extends ChangeNotifier {
 
   void disconnect() {
     stopMonitoring();
+    clearCredentials();
     _status = ConnectionStatus.disconnected;
     _currentUrl = null;
     _backendInfo = null;
     _error = null;
     _token = null;
+    _apiClient?.setToken(null);
     notifyListeners();
   }
 }

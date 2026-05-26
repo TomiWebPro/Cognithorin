@@ -20,6 +20,7 @@ class ApiClient {
   String? _token;
   Uint8List? _derivedKey;
   final Duration _timeout;
+  void Function()? onUnauthorized;
 
   ApiClient({this._baseUrl = 'http://localhost:8000', Duration? timeout})
       : _timeout = timeout ?? const Duration(seconds: 60);
@@ -36,6 +37,7 @@ class ApiClient {
   }
 
   String? get token => _token;
+  Uint8List? get derivedKey => _derivedKey;
 
   Map<String, String> get _headers {
     final headers = <String, String>{
@@ -59,9 +61,31 @@ class ApiClient {
     if (_derivedKey == null || response.body.isEmpty) {
       return _handleResponse(response);
     }
-    final encPayload = jsonDecode(response.body) as Map<String, dynamic>;
-    final plaintext = EncryptionService.decrypt(encPayload, _derivedKey!);
-    return jsonDecode(plaintext) as Map<String, dynamic>;
+    try {
+      final encPayload = jsonDecode(response.body) as Map<String, dynamic>;
+      final plaintext = EncryptionService.decrypt(encPayload, _derivedKey!);
+      return jsonDecode(plaintext) as Map<String, dynamic>;
+    } catch (_) {
+      return _handleResponse(response);
+    }
+  }
+
+  Future<Map<String, dynamic>> postRaw(
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path');
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    final response = await http
+        .post(
+          uri,
+          headers: headers,
+          body: body != null ? jsonEncode(body) : null,
+        )
+        .timeout(_timeout);
+    return _handleResponse(response);
   }
 
   Future<Map<String, dynamic>> get(
@@ -152,6 +176,10 @@ class ApiClient {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
+    if (response.statusCode == 401) {
+      onUnauthorized?.call();
+    }
+
     String message;
     try {
       final body = jsonDecode(response.body);
@@ -192,6 +220,10 @@ class ApiClient {
     if (response.statusCode >= 200 && response.statusCode < 300) {
       if (response.body.isEmpty) return [];
       return jsonDecode(response.body) as List<dynamic>;
+    }
+
+    if (response.statusCode == 401) {
+      onUnauthorized?.call();
     }
 
     String message;

@@ -40,12 +40,20 @@ class _SettingsScreenState extends State<SettingsScreen>
     _settingsService = SettingsService(widget.apiClient);
     _tabController = TabController(length: 4, vsync: this);
     _loadProviders();
+    widget.backendService.addListener(_onBackendChanged);
   }
 
   @override
   void dispose() {
+    widget.backendService.removeListener(_onBackendChanged);
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _onBackendChanged() {
+    if (widget.backendService.isConnected) {
+      _loadProviders();
+    }
   }
 
   Future<void> _loadProviders() async {
@@ -277,6 +285,7 @@ class _ConnectionTabState extends State<_ConnectionTab> {
               backendService: widget.backendService,
               apiClient: widget.apiClient,
               onConnected: () {
+                if (!mounted) return;
                 final url = widget.backendService.currentUrl;
                 if (url != null) {
                   widget.apiClient.setBaseUrl(url);
@@ -573,7 +582,7 @@ class _SecurityTabState extends State<_SecurityTab> {
   void initState() {
     super.initState();
     _tokenExpiryController = TextEditingController();
-    _loadSecuritySettings();
+    _loadSecuritySettings().catchError((_) {});
   }
 
   @override
@@ -596,6 +605,7 @@ class _SecurityTabState extends State<_SecurityTab> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+      rethrow;
     }
   }
 
@@ -688,7 +698,10 @@ class _SecurityTabState extends State<_SecurityTab> {
       await widget.settingsService.updateSecuritySettings({
         'database_encryption_enabled': enable.toString(),
       });
-      await _loadSecuritySettings();
+      _securityData['database_encryption_enabled'] = enable;
+      try {
+        await _loadSecuritySettings();
+      } catch (_) {}
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

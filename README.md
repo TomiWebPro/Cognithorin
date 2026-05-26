@@ -19,7 +19,7 @@ This project is an independent re-implementation of the concepts from the origin
 - **Data-driven LLM provider configuration** — add new providers via DB insert, no code changes
 - **Multi-provider routing** — single, fallback chain, or round-robin
 - **Model testing & health monitoring** — per-model availability tracking
-- **Optional SQLCipher-encrypted SQLite databases** — key from env var → OS keyring → fallback
+- **Optional SQLCipher-encrypted SQLite databases/new** — key from env var → OS keyring → fallback
 - **Structured logging** to SQLite (error/warning/notify/normal-operation levels)
 - **Interactive CLI** for provider CRUD, model management, and connection info
 - **Onboarding passkey** with QR code for frontend setup
