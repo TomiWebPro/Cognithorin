@@ -124,6 +124,47 @@ class ProviderRecord {
       );
 }
 
+class AgentRecord {
+  final int? id;
+  final String agentId;
+  final String name;
+  final int contextWindow;
+  final String? modelRef;
+  final String? backupModelRef;
+  final String? createdAt;
+  final String? updatedAt;
+
+  AgentRecord({
+    this.id,
+    required this.agentId,
+    required this.name,
+    this.contextWindow = 4096,
+    this.modelRef,
+    this.backupModelRef,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        if (id != null) 'id': id,
+        'name': name,
+        'context_window': contextWindow,
+        if (modelRef != null) 'model_ref': modelRef,
+        if (backupModelRef != null) 'backup_model_ref': backupModelRef,
+      };
+
+  factory AgentRecord.fromJson(Map<String, dynamic> json) => AgentRecord(
+        id: json['id'] as int?,
+        agentId: json['agent_id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        contextWindow: json['context_window'] as int? ?? 4096,
+        modelRef: json['model_ref'] as String?,
+        backupModelRef: json['backup_model_ref'] as String?,
+        createdAt: json['created_at'] as String?,
+        updatedAt: json['updated_at'] as String?,
+      );
+}
+
 class EndpointStatus {
   final String provider;
   final bool available;

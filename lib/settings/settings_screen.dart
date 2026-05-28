@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/api_service/api_client.dart';
 import '../services/api_service/provider_service.dart';
+import '../services/api_service/agent_service.dart';
 import '../services/api_service/settings_service.dart';
 import '../services/api_service/models.dart';
 import '../services/backend_service.dart';
@@ -27,19 +28,23 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen>
     with SingleTickerProviderStateMixin {
   late final ProviderService _providerService;
+  late final AgentService _agentService;
   late final SettingsService _settingsService;
   late final TabController _tabController;
 
   final List<ProviderRecord> _providers = [];
+  final List<AgentRecord> _agents = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _providerService = ProviderService(widget.apiClient);
+    _agentService = AgentService(widget.apiClient);
     _settingsService = SettingsService(widget.apiClient);
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadProviders();
+    _loadAgents();
     widget.backendService.addListener(_onBackendChanged);
   }
 
@@ -71,6 +76,179 @@ class _SettingsScreenState extends State<SettingsScreen>
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadAgents() async {
+    try {
+      final agents = await _agentService.getAgents();
+      if (!mounted) return;
+      setState(() => _agents
+        ..clear()
+        ..addAll(agents));
+    } catch (_) {}
+  }
+
+  Future<void> _deleteAgent(String agentId) async {
+    try {
+      await _agentService.deleteAgent(agentId);
+      setState(() => _agents.removeWhere((a) => a.agentId == agentId));
+      _showSuccess('Agent deleted');
+    } catch (e) {
+      _showError(e.toString());
+    }
+  }
+
+  void _addAgent() {
+    final nameCtrl = TextEditingController();
+    final cwCtrl = TextEditingController(text: '4096');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Agent'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Name',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: cwCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Context Window',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final name = nameCtrl.text.trim();
+              if (name.isEmpty) return;
+              final cw = int.tryParse(cwCtrl.text) ?? 4096;
+              Navigator.pop(ctx);
+              try {
+                final agent = await _agentService.createAgent({
+                  'name': name,
+                  'context_window': cw,
+                });
+                if (!mounted) return;
+                setState(() => _agents.add(agent));
+                _showSuccess('Agent $name created');
+              } catch (e) {
+                _showError(e.toString());
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editContextWindow(AgentRecord agent) {
+    final cwCtrl = TextEditingController(text: agent.contextWindow.toString());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Edit Context Window — ${agent.agentId}'),
+        content: TextField(
+          controller: cwCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Context Window',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          keyboardType: TextInputType.number,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final cw = int.tryParse(cwCtrl.text);
+              if (cw == null) return;
+              Navigator.pop(ctx);
+              try {
+                final updated = await _agentService.updateAgent(
+                  agent.agentId,
+                  {'context_window': cw},
+                );
+                if (!mounted) return;
+                setState(() {
+                  final idx = _agents.indexWhere((a) => a.agentId == agent.agentId);
+                  if (idx >= 0) _agents[idx] = updated;
+                });
+                _showSuccess('Context window updated');
+              } catch (e) {
+                _showError(e.toString());
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _linkModel(AgentRecord agent, {required bool backup}) {
+    final modelRefs = <String>[];
+    for (final p in _providers) {
+      for (final m in p.models.keys) {
+        modelRefs.add('${p.name}::$m');
+      }
+    }
+    if (modelRefs.isEmpty) {
+      _showError('No models available. Add a provider first.');
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(backup ? 'Link Backup Model' : 'Link Primary Model'),
+        children: [
+          SizedBox(
+            height: 300,
+            width: double.maxFinite,
+            child: ListView.builder(
+              itemCount: modelRefs.length,
+              itemBuilder: (ctx, i) => ListTile(
+                dense: true,
+                title: Text(modelRefs[i], style: const TextStyle(fontSize: 14)),
+                selected: (backup ? agent.backupModelRef : agent.modelRef) == modelRefs[i],
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  try {
+                    final updated = await _agentService.updateAgent(
+                      agent.agentId,
+                      backup ? {'backup_model_ref': modelRefs[i]} : {'model_ref': modelRefs[i]},
+                    );
+                    if (!mounted) return;
+                    setState(() {
+                      final idx = _agents.indexWhere((a) => a.agentId == agent.agentId);
+                      if (idx >= 0) _agents[idx] = updated;
+                    });
+                    _showSuccess('Model linked');
+                  } catch (e) {
+                    _showError(e.toString());
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showError(String msg) {
@@ -130,6 +308,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             Tab(icon: Icon(Icons.info_outline), text: 'Connection'),
             Tab(icon: Icon(Icons.cloud), text: 'Providers'),
             Tab(icon: Icon(Icons.smart_toy), text: 'Models'),
+            Tab(icon: Icon(Icons.person), text: 'Agents'),
             Tab(icon: Icon(Icons.lock), text: 'Security'),
           ],
         ),
@@ -155,6 +334,13 @@ class _SettingsScreenState extends State<SettingsScreen>
                   providers: _providers,
                   providerService: _providerService,
                   onReload: _loadProviders,
+                ),
+                _AgentsTab(
+                  agents: _agents,
+                  onDelete: _deleteAgent,
+                  onAdd: _addAgent,
+                  onEditContextWindow: _editContextWindow,
+                  onLinkModel: _linkModel,
                 ),
                 _SecurityTab(
                   settingsService: _settingsService,
@@ -545,6 +731,149 @@ class _ProvidersTab extends StatelessWidget {
             onPressed: () {
               Navigator.pop(ctx);
               onDelete(name);
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AgentsTab extends StatelessWidget {
+  final List<AgentRecord> agents;
+  final Future<void> Function(String agentId) onDelete;
+  final VoidCallback onAdd;
+  final void Function(AgentRecord agent) onEditContextWindow;
+  final void Function(AgentRecord agent, {required bool backup}) onLinkModel;
+
+  const _AgentsTab({
+    required this.agents,
+    required this.onDelete,
+    required this.onAdd,
+    required this.onEditContextWindow,
+    required this.onLinkModel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (agents.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('No agents configured'),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              icon: const Icon(Icons.add),
+              label: const Text('Add Agent'),
+              onPressed: onAdd,
+            ),
+          ],
+        ),
+      );
+    }
+    return Stack(
+      children: [
+        ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+          itemCount: agents.length,
+          itemBuilder: (context, index) {
+            final a = agents[index];
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ExpansionTile(
+                leading: const Icon(Icons.person, size: 24),
+                title: Text(a.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(
+                  'ID: ${a.agentId}  |  CW: ${a.contextWindow}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _agentRow('Context Window', a.contextWindow.toString()),
+                        _agentRow('Primary Model', a.modelRef ?? '(none)'),
+                        _agentRow('Backup Model', a.backupModelRef ?? '(none)'),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
+                            ActionChip(
+                              label: const Text('Edit CW', style: TextStyle(fontSize: 12)),
+                              onPressed: () => onEditContextWindow(a),
+                            ),
+                            ActionChip(
+                              label: const Text('Primary Model', style: TextStyle(fontSize: 12)),
+                              onPressed: () => onLinkModel(a, backup: false),
+                            ),
+                            ActionChip(
+                              label: const Text('Backup Model', style: TextStyle(fontSize: 12)),
+                              onPressed: () => onLinkModel(a, backup: true),
+                            ),
+                            ActionChip(
+                              label: const Text('Delete', style: TextStyle(fontSize: 12)),
+                              onPressed: () => _confirmDelete(context, a),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton(
+            heroTag: 'add_agent',
+            onPressed: onAdd,
+            child: const Icon(Icons.add),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _agentRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          Text(value, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDelete(BuildContext context, AgentRecord agent) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Agent'),
+        content: Text('Delete "${agent.name}" (${agent.agentId})?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              onDelete(agent.agentId);
             },
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(ctx).colorScheme.error,
