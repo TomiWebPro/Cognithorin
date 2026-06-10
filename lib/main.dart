@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'services/api_service/api_client.dart';
 import 'services/backend_service.dart';
 import 'onboarding_screens/connect_screen.dart';
-import 'settings/settings_screen.dart';
+import 'reuseable_widgets/setup_dialog.dart';
+import 'dashboard/dashboard_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -99,6 +100,29 @@ class _MyAppState extends State<MyApp> {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: Colors.deepPurple.withValues(alpha: 0.08),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+        ),
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+          scrolledUnderElevation: 1,
+        ),
+        textTheme: const TextTheme(
+          titleLarge: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.3),
+          titleMedium: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.2),
+          titleSmall: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.1),
+          bodyLarge: TextStyle(letterSpacing: 0),
+          bodyMedium: TextStyle(letterSpacing: 0),
+          labelSmall: TextStyle(fontWeight: FontWeight.w500, letterSpacing: 0.3),
+        ),
       ),
       darkTheme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -106,27 +130,47 @@ class _MyAppState extends State<MyApp> {
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        cardTheme: CardThemeData(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: Colors.deepPurple.withValues(alpha: 0.15),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+        ),
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+          scrolledUnderElevation: 1,
+        ),
+        textTheme: const TextTheme(
+          titleLarge: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.3),
+          titleMedium: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.2),
+          titleSmall: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.1),
+          bodyLarge: TextStyle(letterSpacing: 0),
+          bodyMedium: TextStyle(letterSpacing: 0),
+          labelSmall: TextStyle(fontWeight: FontWeight.w500, letterSpacing: 0.3),
+        ),
       ),
       themeMode: ThemeMode.system,
       home: !_ready
           ? const Scaffold(
               body: Center(child: CircularProgressIndicator()),
             )
-          : _backendService.isConnected
-              ? SettingsScreen(
+              : _backendService.isConnected
+              ? DashboardScreen(
                   apiClient: _apiClient,
                   backendService: _backendService,
                   onDisconnect: _onDisconnect,
                 )
-              : Scaffold(
-                  appBar: AppBar(title: const Text('Cognithor')),
-                  body: Center(
-                    child: ConnectContent(
-                      backendService: _backendService,
-                      onConnected: _onConnected,
-                      apiClient: _apiClient,
-                      initialUrl: _backendService.savedUrl,
-                    ),
+              : SetupDialog(
+                  child: ConnectContent(
+                    backendService: _backendService,
+                    onConnected: _onConnected,
+                    apiClient: _apiClient,
+                    initialUrl: _backendService.savedUrl,
                   ),
                 ),
     );

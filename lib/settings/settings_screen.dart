@@ -1,13 +1,24 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/api_service/api_client.dart';
 import '../services/api_service/provider_service.dart';
 import '../services/api_service/agent_service.dart';
 import '../services/api_service/settings_service.dart';
+import '../services/api_service/app_service.dart';
 import '../services/api_service/models.dart';
 import '../services/backend_service.dart';
-import '../onboarding_screens/connect_screen.dart';
 import 'provider_form_screen.dart';
 import 'model_management_screen.dart';
+import 'tabs/connection_tab.dart';
+import 'tabs/providers_tab.dart';
+import 'tabs/models_tab.dart';
+import 'tabs/agents_tab.dart';
+import 'tabs/apps_tab.dart';
+import 'tabs/notes_tab.dart';
+import 'tabs/diary_tab.dart';
+import 'tabs/alarms_tab.dart';
+import 'tabs/time_tab.dart';
+import 'tabs/security_tab.dart';
 
 class SettingsScreen extends StatefulWidget {
   final ApiClient apiClient;
@@ -30,10 +41,12 @@ class _SettingsScreenState extends State<SettingsScreen>
   late final ProviderService _providerService;
   late final AgentService _agentService;
   late final SettingsService _settingsService;
+  late final AppService _appService;
   late final TabController _tabController;
 
   final List<ProviderRecord> _providers = [];
   final List<AgentRecord> _agents = [];
+  final List<AppRecord> _apps = [];
   bool _loading = true;
 
   @override
@@ -42,9 +55,9 @@ class _SettingsScreenState extends State<SettingsScreen>
     _providerService = ProviderService(widget.apiClient);
     _agentService = AgentService(widget.apiClient);
     _settingsService = SettingsService(widget.apiClient);
-    _tabController = TabController(length: 5, vsync: this);
-    _loadProviders();
-    _loadAgents();
+    _appService = AppService(widget.apiClient);
+    _tabController = TabController(length: 10, vsync: this);
+    _loadAll();
     widget.backendService.addListener(_onBackendChanged);
   }
 
@@ -57,35 +70,54 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   void _onBackendChanged() {
     if (widget.backendService.isConnected) {
-      _loadProviders();
+      _loadAll();
     }
   }
 
-  Future<void> _loadProviders() async {
+  Future<void> _loadAll() async {
     setState(() => _loading = true);
+    await Future.wait([_loadProviders(), _loadAgents(), _loadApps()]);
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadProviders() async {
     try {
       final providers = await _providerService.getProviders();
       if (!mounted) return;
-      setState(() {
-        _providers
-          ..clear()
-          ..addAll(providers);
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-    }
+      setState(() => _providers..clear()..addAll(providers));
+    } catch (_) {}
   }
 
   Future<void> _loadAgents() async {
     try {
       final agents = await _agentService.getAgents();
       if (!mounted) return;
-      setState(() => _agents
-        ..clear()
-        ..addAll(agents));
+      setState(() => _agents..clear()..addAll(agents));
     } catch (_) {}
+  }
+
+  Future<void> _loadApps() async {
+    try {
+      final apps = await _appService.getApps(all: true);
+      if (!mounted) return;
+      setState(() => _apps..clear()..addAll(apps));
+    } catch (_) {}
+  }
+
+  void _showError(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(msg),
+          backgroundColor: Theme.of(context).colorScheme.error),
+    );
+  }
+
+  void _showSuccess(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: Colors.green.shade600),
+    );
   }
 
   Future<void> _deleteAgent(String agentId) async {
@@ -101,6 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   void _addAgent() {
     final nameCtrl = TextEditingController();
     final cwCtrl = TextEditingController(text: '4096');
+    final paCtrl = TextEditingController(text: '15');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -111,20 +144,21 @@ class _SettingsScreenState extends State<SettingsScreen>
             TextField(
               controller: nameCtrl,
               decoration: const InputDecoration(
-                labelText: 'Name',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
+                  labelText: 'Name', border: OutlineInputBorder(), isDense: true),
               autofocus: true,
             ),
             const SizedBox(height: 12),
             TextField(
               controller: cwCtrl,
               decoration: const InputDecoration(
-                labelText: 'Context Window',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
+                  labelText: 'Context Window', border: OutlineInputBorder(), isDense: true),
+              keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: paCtrl,
+              decoration: const InputDecoration(
+                  labelText: 'Past Actions Limit (min 3)', border: OutlineInputBorder(), isDense: true),
               keyboardType: TextInputType.number,
             ),
           ],
@@ -136,11 +170,17 @@ class _SettingsScreenState extends State<SettingsScreen>
               final name = nameCtrl.text.trim();
               if (name.isEmpty) return;
               final cw = int.tryParse(cwCtrl.text) ?? 4096;
+              final pa = int.tryParse(paCtrl.text) ?? 15;
               Navigator.pop(ctx);
               try {
                 final agent = await _agentService.createAgent({
                   'name': name,
                   'context_window': cw,
+                  'max_past_actions': pa < 3 ? 3 : pa,
+                  'show_context_window': true,
+                  'show_notes': true,
+                  'show_diary': true,
+                  'show_time': true,
                 });
                 if (!mounted) return;
                 setState(() => _agents.add(agent));
@@ -156,6 +196,19 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
+  Future<void> _updateAgentField(String agentId, Map<String, dynamic> fields) async {
+    try {
+      final updated = await _agentService.updateAgent(agentId, fields);
+      if (!mounted) return;
+      setState(() {
+        final idx = _agents.indexWhere((a) => a.agentId == agentId);
+        if (idx >= 0) _agents[idx] = updated;
+      });
+    } catch (e) {
+      _showError(e.toString());
+    }
+  }
+
   void _editContextWindow(AgentRecord agent) {
     final cwCtrl = TextEditingController(text: agent.contextWindow.toString());
     showDialog(
@@ -165,10 +218,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         content: TextField(
           controller: cwCtrl,
           decoration: const InputDecoration(
-            labelText: 'Context Window',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
+              labelText: 'Context Window', border: OutlineInputBorder(), isDense: true),
           keyboardType: TextInputType.number,
           autofocus: true,
         ),
@@ -179,20 +229,38 @@ class _SettingsScreenState extends State<SettingsScreen>
               final cw = int.tryParse(cwCtrl.text);
               if (cw == null) return;
               Navigator.pop(ctx);
-              try {
-                final updated = await _agentService.updateAgent(
-                  agent.agentId,
-                  {'context_window': cw},
-                );
-                if (!mounted) return;
-                setState(() {
-                  final idx = _agents.indexWhere((a) => a.agentId == agent.agentId);
-                  if (idx >= 0) _agents[idx] = updated;
-                });
-                _showSuccess('Context window updated');
-              } catch (e) {
-                _showError(e.toString());
-              }
+              await _updateAgentField(agent.agentId, {'context_window': cw});
+              _showSuccess('Context window updated');
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editPastActions(AgentRecord agent) {
+    final paCtrl = TextEditingController(text: agent.maxPastActions.toString());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Edit Past Actions Limit — ${agent.agentId}'),
+        content: TextField(
+          controller: paCtrl,
+          decoration: const InputDecoration(
+              labelText: 'Past Actions (min 3)', border: OutlineInputBorder(), isDense: true),
+          keyboardType: TextInputType.number,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              final pa = int.tryParse(paCtrl.text);
+              if (pa == null || pa < 3) return;
+              Navigator.pop(ctx);
+              await _updateAgentField(agent.agentId, {'max_past_actions': pa});
+              _showSuccess('Past actions limit updated');
             },
             child: const Text('Save'),
           ),
@@ -228,20 +296,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                 selected: (backup ? agent.backupModelRef : agent.modelRef) == modelRefs[i],
                 onTap: () async {
                   Navigator.pop(ctx);
-                  try {
-                    final updated = await _agentService.updateAgent(
-                      agent.agentId,
-                      backup ? {'backup_model_ref': modelRefs[i]} : {'model_ref': modelRefs[i]},
-                    );
-                    if (!mounted) return;
-                    setState(() {
-                      final idx = _agents.indexWhere((a) => a.agentId == agent.agentId);
-                      if (idx >= 0) _agents[idx] = updated;
-                    });
-                    _showSuccess('Model linked');
-                  } catch (e) {
-                    _showError(e.toString());
-                  }
+                  await _updateAgentField(
+                    agent.agentId,
+                    backup ? {'backup_model_ref': modelRefs[i]} : {'model_ref': modelRefs[i]},
+                  );
+                  _showSuccess('Model linked');
                 },
               ),
             ),
@@ -251,20 +310,52 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
-  void _showError(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-          content: Text(msg),
-          backgroundColor: Theme.of(context).colorScheme.error),
-    );
-  }
-
-  void _showSuccess(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.green.shade600),
-    );
+  Future<void> _viewDiary(AgentRecord agent) async {
+    try {
+      final data = await widget.apiClient.get('/agents/${agent.agentId}/diary');
+      final entries = (data['entries'] as List<dynamic>?)
+              ?.map((e) => DiaryEntry.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [];
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Diary — ${agent.name}'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: entries.isEmpty
+                ? const Text('No diary entries')
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: entries.length,
+                    itemBuilder: (ctx, i) {
+                      final e = entries[i];
+                      return Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(e.date,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              const SizedBox(height: 4),
+                              Text(e.content, style: const TextStyle(fontSize: 13)),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          ],
+        ),
+      );
+    } catch (e) {
+      _showError(e.toString());
+    }
   }
 
   Future<void> _deleteProvider(String name) async {
@@ -284,8 +375,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         final created = await _providerService.createProvider(record);
         setState(() => _providers.add(created));
       } else {
-        final updated =
-            await _providerService.updateProvider(record.name, record);
+        final updated = await _providerService.updateProvider(record.name, record);
         setState(() {
           final idx = _providers.indexWhere((p) => p.name == record.name);
           if (idx >= 0) _providers[idx] = updated;
@@ -295,60 +385,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     } catch (e) {
       _showError(e.toString());
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.info_outline), text: 'Connection'),
-            Tab(icon: Icon(Icons.cloud), text: 'Providers'),
-            Tab(icon: Icon(Icons.smart_toy), text: 'Models'),
-            Tab(icon: Icon(Icons.person), text: 'Agents'),
-            Tab(icon: Icon(Icons.lock), text: 'Security'),
-          ],
-        ),
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _ConnectionTab(
-                  apiClient: widget.apiClient,
-                  backendService: widget.backendService,
-                  onDisconnect: widget.onDisconnect,
-                ),
-                _ProvidersTab(
-                  providers: _providers,
-                  onDelete: _deleteProvider,
-                  onEdit: (p) => _openProviderForm(p),
-                  onAdd: () => _openProviderForm(null),
-                  onManageModels: _manageModels,
-                ),
-                _ModelsTab(
-                  providers: _providers,
-                  providerService: _providerService,
-                  onReload: _loadProviders,
-                ),
-                _AgentsTab(
-                  agents: _agents,
-                  onDelete: _deleteAgent,
-                  onAdd: _addAgent,
-                  onEditContextWindow: _editContextWindow,
-                  onLinkModel: _linkModel,
-                ),
-                _SecurityTab(
-                  settingsService: _settingsService,
-                  apiClient: widget.apiClient,
-                ),
-              ],
-            ),
-    );
   }
 
   Future<void> _manageModels(ProviderRecord provider) async {
@@ -370,19 +406,16 @@ class _SettingsScreenState extends State<SettingsScreen>
       setState(() {
         final idx = _providers.indexWhere((p) => p.name == provider.name);
         if (idx >= 0) {
-          _providers[idx].models
-            ..clear()
-            ..addAll(models);
-          _providers[idx].activeModels
-            ..clear()
-            ..addAll(activeModels);
+          _providers[idx].models..clear()..addAll(models);
+          _providers[idx].activeModels..clear()..addAll(activeModels);
         }
       });
       _loadProviders();
     }
   }
 
-  Future<void> _updateProviderModels(String name, Map<String, String> models, Map<String, bool> activeModels) async {
+  Future<void> _updateProviderModels(
+      String name, Map<String, String> models, Map<String, bool> activeModels) async {
     final idx = _providers.indexWhere((p) => p.name == name);
     if (idx < 0) return;
     final updated = ProviderRecord(
@@ -424,1035 +457,106 @@ class _SettingsScreenState extends State<SettingsScreen>
       await _saveProvider(result);
     }
   }
-}
-
-class _ConnectionTab extends StatefulWidget {
-  final ApiClient apiClient;
-  final BackendConnectionService backendService;
-  final VoidCallback onDisconnect;
-
-  const _ConnectionTab({
-    required this.apiClient,
-    required this.backendService,
-    required this.onDisconnect,
-  });
-
-  @override
-  State<_ConnectionTab> createState() => _ConnectionTabState();
-}
-
-class _ConnectionTabState extends State<_ConnectionTab> {
-  @override
-  void initState() {
-    super.initState();
-    widget.backendService.addListener(_onServiceChanged);
-    widget.backendService.startMonitoring();
-  }
-
-  @override
-  void dispose() {
-    widget.backendService.removeListener(_onServiceChanged);
-    widget.backendService.stopMonitoring();
-    super.dispose();
-  }
-
-  void _onServiceChanged() {
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _doReconnect() async {
-    final result = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('Reconnect')),
-          body: Center(
-            child: ConnectContent(
-              backendService: widget.backendService,
-              apiClient: widget.apiClient,
-              onConnected: () {
-                if (!mounted) return;
-                final url = widget.backendService.currentUrl;
-                if (url != null) {
-                  widget.apiClient.setBaseUrl(url);
-                  final token = widget.backendService.token;
-                  if (token != null) {
-                    widget.apiClient.setToken(token);
-                  }
-                  widget.backendService.saveUrl(url);
-                  widget.backendService.startMonitoring();
-                }
-                Navigator.pop(context, true);
-              },
-              initialUrl: widget.backendService.currentUrl,
-            ),
-          ),
-        ),
-      ),
-    );
-    if (result == true && mounted) {
-      setState(() {});
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final service = widget.backendService;
-    final connected = service.isConnected;
-    final info = service.backendInfo;
-    final url = service.currentUrl;
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Settings'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
           child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      connected ? Icons.check_circle : Icons.cloud_off,
-                      color: connected ? Colors.green.shade600 : Colors.orange.shade700,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      connected ? 'Connected' : 'Disconnected',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ],
-                ),
-                if (info != null) ...[
-                  const SizedBox(height: 12),
-                  _infoRow('Backend URL', url ?? '-'),
-                  _infoRow('Name', info.message),
-                  _infoRow('Version', info.version),
-                  _infoRow('Status', info.status),
-                  _infoRow('Server Time', info.timestamp),
-                ] else if (url != null) ...[
-                  const SizedBox(height: 12),
-                  _infoRow('Stored URL', url),
-                ],
-                if (service.error != null && !connected) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.warning, size: 16, color: Theme.of(context).colorScheme.error),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(service.error!,
-                              style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onErrorContainer)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _doReconnect,
-                        icon: const Icon(Icons.wifi_find, size: 18),
-                        label: const Text('Reconnect'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          showDialog(
-                            context: context,
-                            builder: (ctx) => AlertDialog(
-                              title: const Text('Disconnect'),
-                              content: const Text('Clear backend connection?'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(ctx),
-                                  child: const Text('Cancel'),
-                                ),
-                                FilledButton(
-                                  onPressed: () {
-                                    Navigator.pop(ctx);
-                                    widget.onDisconnect();
-                                  },
-                                  child: const Text('Disconnect'),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.link_off, size: 18),
-                        label: const Text('Disconnect'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-          Flexible(
-            child: Text(value,
-                textAlign: TextAlign.end,
-                style: const TextStyle(fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProvidersTab extends StatelessWidget {
-  final List<ProviderRecord> providers;
-  final Future<void> Function(String name) onDelete;
-  final void Function(ProviderRecord) onEdit;
-  final VoidCallback onAdd;
-  final void Function(ProviderRecord) onManageModels;
-
-  const _ProvidersTab({
-    required this.providers,
-    required this.onDelete,
-    required this.onEdit,
-    required this.onAdd,
-    required this.onManageModels,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (providers.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('No providers configured'),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text('Add Provider'),
-              onPressed: onAdd,
-            ),
-          ],
-        ),
-      );
-    }
-    return Stack(
-      children: [
-        ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-          itemCount: providers.length,
-          itemBuilder: (context, index) {
-            final p = providers[index];
-            final anyActive = p.activeModels.values.any((v) => v);
-            return Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                leading: Icon(
-                  anyActive || p.isActive
-                      ? Icons.check_circle
-                      : Icons.cloud,
-                  color: anyActive || p.isActive ? Colors.green : null,
-                ),
-                title: Text(p.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text(
-                  '${p.baseUrl}${p.endpointPath}\n'
-                  'Auth: ${p.authType} | Models: ${p.models.length}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                isThreeLine: true,
-                trailing: PopupMenuButton<String>(
-                  onSelected: (action) {
-                    switch (action) {
-                      case 'edit':
-                        onEdit(p);
-                      case 'models':
-                        onManageModels(p);
-                      case 'delete':
-                        _confirmDelete(context, p.name);
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                    const PopupMenuItem(
-                        value: 'models', child: Text('Manage Models')),
-                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                  ],
-                ),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: TabBar(
+              controller: _tabController,
+              isScrollable: true,
+              labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+              indicator: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: Theme.of(context).colorScheme.primaryContainer,
               ),
-            );
-          },
-        ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: FloatingActionButton(
-            heroTag: 'add_provider',
-            onPressed: onAdd,
-            child: const Icon(Icons.add),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _confirmDelete(BuildContext context, String name) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Provider'),
-        content: Text('Are you sure you want to delete "$name"?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              onDelete(name);
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
-            ),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AgentsTab extends StatelessWidget {
-  final List<AgentRecord> agents;
-  final Future<void> Function(String agentId) onDelete;
-  final VoidCallback onAdd;
-  final void Function(AgentRecord agent) onEditContextWindow;
-  final void Function(AgentRecord agent, {required bool backup}) onLinkModel;
-
-  const _AgentsTab({
-    required this.agents,
-    required this.onDelete,
-    required this.onAdd,
-    required this.onEditContextWindow,
-    required this.onLinkModel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (agents.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('No agents configured'),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              icon: const Icon(Icons.add),
-              label: const Text('Add Agent'),
-              onPressed: onAdd,
-            ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              dividerColor: Colors.transparent,
+              unselectedLabelColor:
+                  Theme.of(context).colorScheme.onSurfaceVariant,
+              labelColor:
+                  Theme.of(context).colorScheme.onPrimaryContainer,
+              tabs: const [
+            Tab(icon: Icon(Icons.info_outline, size: 18), text: 'Connection'),
+            Tab(icon: Icon(Icons.cloud, size: 18), text: 'Providers'),
+            Tab(icon: Icon(Icons.smart_toy, size: 18), text: 'Models'),
+            Tab(icon: Icon(Icons.person, size: 18), text: 'Agents'),
+            Tab(icon: Icon(Icons.apps, size: 18), text: 'Apps'),
+            Tab(icon: Icon(Icons.note, size: 18), text: 'Notes'),
+            Tab(icon: Icon(Icons.book, size: 18), text: 'Diary'),
+            Tab(icon: Icon(Icons.alarm, size: 18), text: 'Alarms'),
+            Tab(icon: Icon(Icons.schedule, size: 18), text: 'Time'),
+            Tab(icon: Icon(Icons.lock, size: 18), text: 'Security'),
           ],
-        ),
-      );
-    }
-    return Stack(
-      children: [
-        ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-          itemCount: agents.length,
-          itemBuilder: (context, index) {
-            final a = agents[index];
-            return Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ExpansionTile(
-                leading: const Icon(Icons.person, size: 24),
-                title: Text(a.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text(
-                  'ID: ${a.agentId}  |  CW: ${a.contextWindow}',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _agentRow('Context Window', a.contextWindow.toString()),
-                        _agentRow('Primary Model', a.modelRef ?? '(none)'),
-                        _agentRow('Backup Model', a.backupModelRef ?? '(none)'),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          children: [
-                            ActionChip(
-                              label: const Text('Edit CW', style: TextStyle(fontSize: 12)),
-                              onPressed: () => onEditContextWindow(a),
-                            ),
-                            ActionChip(
-                              label: const Text('Primary Model', style: TextStyle(fontSize: 12)),
-                              onPressed: () => onLinkModel(a, backup: false),
-                            ),
-                            ActionChip(
-                              label: const Text('Backup Model', style: TextStyle(fontSize: 12)),
-                              onPressed: () => onLinkModel(a, backup: true),
-                            ),
-                            ActionChip(
-                              label: const Text('Delete', style: TextStyle(fontSize: 12)),
-                              onPressed: () => _confirmDelete(context, a),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: FloatingActionButton(
-            heroTag: 'add_agent',
-            onPressed: onAdd,
-            child: const Icon(Icons.add),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _agentRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-          Text(value, style: const TextStyle(fontSize: 13)),
-        ],
-      ),
-    );
-  }
-
-  void _confirmDelete(BuildContext context, AgentRecord agent) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Agent'),
-        content: Text('Delete "${agent.name}" (${agent.agentId})?'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              onDelete(agent.agentId);
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
             ),
-            child: const Text('Delete'),
           ),
-        ],
+        ),
       ),
-    );
-  }
-}
-
-class _SecurityTab extends StatefulWidget {
-  final SettingsService settingsService;
-  final ApiClient apiClient;
-
-  const _SecurityTab({
-    required this.settingsService,
-    required this.apiClient,
-  });
-
-  @override
-  State<_SecurityTab> createState() => _SecurityTabState();
-}
-
-class _SecurityTabState extends State<_SecurityTab> {
-  Map<String, dynamic> _securityData = {};
-  bool _loading = true;
-  bool _refreshing = false;
-  bool _saving = false;
-  bool _togglingEncryption = false;
-  late TextEditingController _tokenExpiryController;
-
-  @override
-  void initState() {
-    super.initState();
-    _tokenExpiryController = TextEditingController();
-    _loadSecuritySettings().catchError((_) {});
-  }
-
-  @override
-  void dispose() {
-    _tokenExpiryController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadSecuritySettings() async {
-    setState(() => _loading = true);
-    try {
-      final data = await widget.settingsService.getSecuritySettings();
-      if (!mounted) return;
-      setState(() {
-        _securityData = data;
-        _tokenExpiryController.text =
-            data['access_token_expire_minutes']?.toString() ?? '60';
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loading = false);
-      rethrow;
-    }
-  }
-
-  Future<void> _forceRefreshToken() async {
-    setState(() => _refreshing = true);
-    try {
-      final result = await widget.settingsService.refreshToken();
-      final newToken = result['access_token'] as String?;
-      if (newToken != null) {
-        widget.apiClient.setToken(newToken);
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Token refreshed successfully'),
-            backgroundColor: Colors.green.shade600,
-          ),
-        );
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to refresh token: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _refreshing = false);
-    }
-  }
-
-  Future<void> _saveTokenExpiry() async {
-    final value = double.tryParse(_tokenExpiryController.text);
-    if (value == null || value < 0.5 || value > 10) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Token expiry must be between 0.5 and 10 minutes'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.settingsService.updateSecuritySettings({
-        'access_token_expire_minutes': value.toString(),
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Token expiry saved'),
-          backgroundColor: Colors.green.shade600,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to save: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _toggleDbEncryption(bool enable) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Change Database Encryption'),
-        content: Text(
-          enable
-              ? 'This will encrypt all existing database files. '
-                  'The service will be temporarily unavailable during this process. Continue?'
-              : 'This will decrypt all existing database files. '
-                  'The service will be temporarily unavailable during this process. Continue?',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirm')),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-
-    setState(() => _togglingEncryption = true);
-    try {
-      await widget.settingsService.updateSecuritySettings({
-        'database_encryption_enabled': enable.toString(),
-      });
-      _securityData['database_encryption_enabled'] = enable;
-      try {
-        await _loadSecuritySettings();
-      } catch (_) {}
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(enable ? 'Database encryption enabled' : 'Database encryption disabled'),
-          backgroundColor: Colors.green.shade600,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to change encryption: $e'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _togglingEncryption = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final dbEncrypted = _securityData['database_encryption_enabled'] == true;
-    final dbCipherAvail = _securityData['database_encryption_available'] == true;
-    final keyringAvail = _securityData['keyring_available'] == true;
-    final keyringService = _securityData['keyring_service_name'] ?? 'Cognithor';
-    final keyringKey = _securityData['keyring_key_name'] ?? 'db_key';
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              controller: _tabController,
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.timer, size: 20, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Token Refresh Time',
-                        style: Theme.of(context).textTheme.titleMedium),
-                  ],
+                ConnectionTab(
+                  apiClient: widget.apiClient,
+                  backendService: widget.backendService,
+                  onDisconnect: widget.onDisconnect,
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _tokenExpiryController,
-                        decoration: const InputDecoration(
-                          labelText: 'Expiry (minutes)',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: _saving ? null : _saveTokenExpiry,
-                      child: _saving
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Save'),
-                    ),
-                  ],
+                ProvidersTab(
+                  providers: _providers,
+                  providerService: _providerService,
+                  onDelete: _deleteProvider,
+                  onEdit: (p) => _openProviderForm(p),
+                  onAdd: () => _openProviderForm(null),
+                  onManageModels: _manageModels,
+                ),
+                ModelsTab(
+                  providers: _providers,
+                  providerService: _providerService,
+                  onReload: _loadProviders,
+                ),
+                AgentsTab(
+                  agents: _agents,
+                  onDelete: _deleteAgent,
+                  onAdd: _addAgent,
+                  onEditContextWindow: _editContextWindow,
+                  onEditPastActions: _editPastActions,
+                  onToggleField: _updateAgentField,
+                  onLinkModel: _linkModel,
+                  onViewDiary: _viewDiary,
+                ),
+                AppsTab(
+                  apiClient: widget.apiClient,
+                  appService: _appService,
+                  agents: _agents,
+                  onRefresh: _loadApps,
+                ),
+                NotesTab(
+                  apiClient: widget.apiClient,
+                  agents: _agents,
+                ),
+                DiaryTab(
+                  apiClient: widget.apiClient,
+                  agents: _agents,
+                ),
+                AlarmsTab(
+                  apiClient: widget.apiClient,
+                  agents: _agents,
+                ),
+                TimeTab(
+                  apiClient: widget.apiClient,
+                ),
+                SecurityTab(
+                  settingsService: _settingsService,
+                  apiClient: widget.apiClient,
                 ),
               ],
             ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.refresh, size: 20, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Force Token Refresh',
-                        style: Theme.of(context).textTheme.titleMedium),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _refreshing ? null : _forceRefreshToken,
-                    icon: _refreshing
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh, size: 18),
-                    label: Text(_refreshing ? 'Refreshing...' : 'Refresh Token Now'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.lock, size: 20, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Payload Encryption',
-                        style: Theme.of(context).textTheme.titleMedium),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _statusRow(
-                  'Status',
-                  widget.apiClient.token != null ? 'Enabled' : 'Disabled (no token)',
-                  valueColor: widget.apiClient.token != null ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(height: 4),
-                _statusRow('Algorithm', 'AES-256-GCM'),
-                const SizedBox(height: 4),
-                _statusRow('Key Derivation', 'SHA-256(JWT)'),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.storage, size: 20, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Database Encryption',
-                        style: Theme.of(context).textTheme.titleMedium),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Encryption Enabled',
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                    Switch(
-                      value: dbEncrypted,
-                      onChanged: dbCipherAvail && !_togglingEncryption ? _toggleDbEncryption : null,
-                    ),
-                  ],
-                ),
-                if (_togglingEncryption)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: LinearProgressIndicator(),
-                  ),
-                const SizedBox(height: 4),
-                _statusRow(
-                  'Cipher Available',
-                  dbCipherAvail ? 'Yes' : 'No',
-                  valueColor: dbCipherAvail ? Colors.green : Colors.red,
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.vpn_key, size: 20, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Text('Keyring Management',
-                        style: Theme.of(context).textTheme.titleMedium),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _statusRow(
-                  'Keyring Available',
-                  keyringAvail ? 'Yes' : 'No',
-                  valueColor: keyringAvail ? Colors.green : Colors.red,
-                ),
-                const SizedBox(height: 4),
-                _statusRow('Service Name', keyringService),
-                const SizedBox(height: 4),
-                _statusRow('Key Name', keyringKey),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _statusRow(
-    String label,
-    String value, {
-    Color? valueColor,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-          Text(
-            value,
-            textAlign: TextAlign.end,
-            style: TextStyle(
-              fontSize: 13,
-              color: valueColor,
-              fontWeight: valueColor != null ? FontWeight.w600 : null,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModelsTab extends StatelessWidget {
-  final List<ProviderRecord> providers;
-  final ProviderService providerService;
-  final VoidCallback onReload;
-
-  const _ModelsTab({
-    required this.providers,
-    required this.providerService,
-    required this.onReload,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final modelEntries = <_ModelEntry>[];
-    for (final p in providers) {
-      for (final e in p.models.entries) {
-        modelEntries.add(_ModelEntry(
-          providerName: p.name,
-          modelName: e.key,
-          modelId: e.value,
-          isActive: p.activeModels[e.key] ?? false,
-          providerService: providerService,
-          onReload: onReload,
-        ));
-      }
-    }
-
-    if (modelEntries.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.smart_toy, size: 48, color: Colors.grey),
-            SizedBox(height: 12),
-            Text('No models configured'),
-            SizedBox(height: 4),
-            Text('Add models via provider settings',
-                style: TextStyle(fontSize: 13, color: Colors.grey)),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: modelEntries.length,
-      itemBuilder: (context, index) => modelEntries[index],
-    );
-  }
-}
-
-class _ModelEntry extends StatefulWidget {
-  final String providerName;
-  final String modelName;
-  final String modelId;
-  final bool isActive;
-  final ProviderService providerService;
-  final VoidCallback onReload;
-
-  const _ModelEntry({
-    required this.providerName,
-    required this.modelName,
-    required this.modelId,
-    required this.isActive,
-    required this.providerService,
-    required this.onReload,
-  });
-
-  @override
-  State<_ModelEntry> createState() => _ModelEntryState();
-}
-
-class _ModelEntryState extends State<_ModelEntry> {
-  late bool _active;
-  bool _testing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _active = widget.isActive;
-  }
-
-  @override
-  void didUpdateWidget(_ModelEntry old) {
-    super.didUpdateWidget(old);
-    _active = widget.isActive;
-  }
-
-  Future<void> _test() async {
-    setState(() => _testing = true);
-    try {
-      final result = await widget.providerService.testModel(
-        widget.providerName,
-        widget.modelName,
-      );
-      if (!mounted) return;
-      final available = result['available'] as bool? ?? false;
-      setState(() => _active = available);
-      widget.onReload();
-      final latency = result['latency_ms'];
-      final error = result['error'];
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: Icon(
-            available ? Icons.check_circle : Icons.error,
-            color: available ? Colors.green : Colors.red,
-            size: 40,
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(available ? 'Model OK' : 'Model failed',
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Text('Provider: ${widget.providerName}'),
-              Text('Model: ${widget.modelName} (${widget.modelId})'),
-              if (latency != null)
-                Text('Latency: ${(latency as num).toStringAsFixed(0)} ms'),
-              if (result['output_tokens'] != null)
-                Text('Output tokens: ${result['output_tokens']}'),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(error.toString(),
-                      style: const TextStyle(fontSize: 13, color: Colors.red)),
-                ),
-            ],
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _active = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
-    } finally {
-      if (mounted) setState(() => _testing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(
-          _active ? Icons.check_circle : Icons.radio_button_unchecked,
-          color: _active ? Colors.green : Colors.grey,
-          size: 20,
-        ),
-        title: Text(widget.modelName,
-            style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text(
-          '${widget.providerName}  |  ${widget.modelId}',
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: IconButton(
-          icon: _testing
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.wifi_find, size: 20),
-          tooltip: 'Test connection',
-          onPressed: _testing ? null : _test,
-        ),
-      ),
     );
   }
 }

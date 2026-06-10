@@ -131,6 +131,13 @@ class AgentRecord {
   final int contextWindow;
   final String? modelRef;
   final String? backupModelRef;
+  final int maxPastActions;
+  final bool agentCanChangeMaxPastActions;
+  final bool showContextWindow;
+  final bool showNotes;
+  final bool showDiary;
+  final bool showTime;
+  final String status;
   final String? createdAt;
   final String? updatedAt;
 
@@ -141,6 +148,13 @@ class AgentRecord {
     this.contextWindow = 4096,
     this.modelRef,
     this.backupModelRef,
+    this.maxPastActions = 15,
+    this.agentCanChangeMaxPastActions = false,
+    this.showContextWindow = true,
+    this.showNotes = true,
+    this.showDiary = true,
+    this.showTime = true,
+    this.status = 'active',
     this.createdAt,
     this.updatedAt,
   });
@@ -151,6 +165,13 @@ class AgentRecord {
         'context_window': contextWindow,
         if (modelRef != null) 'model_ref': modelRef,
         if (backupModelRef != null) 'backup_model_ref': backupModelRef,
+        'max_past_actions': maxPastActions,
+        'agent_can_change_max_past_actions': agentCanChangeMaxPastActions,
+        'show_context_window': showContextWindow,
+        'show_notes': showNotes,
+        'show_diary': showDiary,
+        'show_time': showTime,
+        'status': status,
       };
 
   factory AgentRecord.fromJson(Map<String, dynamic> json) => AgentRecord(
@@ -160,9 +181,236 @@ class AgentRecord {
         contextWindow: json['context_window'] as int? ?? 4096,
         modelRef: json['model_ref'] as String?,
         backupModelRef: json['backup_model_ref'] as String?,
+        maxPastActions: json['max_past_actions'] as int? ?? 15,
+        agentCanChangeMaxPastActions:
+            json['agent_can_change_max_past_actions'] as bool? ?? false,
+        showContextWindow: json['show_context_window'] as bool? ?? true,
+        showNotes: json['show_notes'] as bool? ?? true,
+        showDiary: json['show_diary'] as bool? ?? true,
+        showTime: json['show_time'] as bool? ?? true,
+        status: json['status'] as String? ?? 'active',
         createdAt: json['created_at'] as String?,
         updatedAt: json['updated_at'] as String?,
       );
+}
+
+class DiaryEntry {
+  final String date;
+  final String content;
+  final String? createdAt;
+  final String? updatedAt;
+
+  DiaryEntry({
+    required this.date,
+    required this.content,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  factory DiaryEntry.fromJson(Map<String, dynamic> json) => DiaryEntry(
+        date: json['date'] as String? ?? '',
+        content: json['content'] as String? ?? '',
+        createdAt: json['created_at'] as String?,
+        updatedAt: json['updated_at'] as String?,
+      );
+}
+
+class AppParameter {
+  final String name;
+  final String type;
+  final String description;
+  final bool required;
+  final String? defaultValue;
+  final List<String> enumValues;
+
+  AppParameter({
+    this.name = '',
+    this.type = 'string',
+    this.description = '',
+    this.required = false,
+    this.defaultValue,
+    this.enumValues = const [],
+  });
+
+  factory AppParameter.fromJson(Map<String, dynamic> json) => AppParameter(
+        name: json['name'] as String? ?? '',
+        type: json['type'] as String? ?? 'string',
+        description: json['description'] as String? ?? '',
+        required: json['required'] as bool? ?? false,
+        defaultValue: json['default'] as String?,
+        enumValues: (json['enum'] as List<dynamic>?)
+                ?.map((e) => e as String)
+                .toList() ??
+            [],
+      );
+}
+
+class AppRecord {
+  final int? id;
+  final String appId;
+  final String name;
+  final String description;
+  final String version;
+  final String author;
+  final String type;
+  final String icon;
+  final String? manifest;
+  final String? directory;
+  final bool isAvailable;
+  final bool requiresConfirmation;
+  final int timeoutSeconds;
+  final String? createdAt;
+  final String? updatedAt;
+
+  AppRecord({
+    this.id,
+    required this.appId,
+    required this.name,
+    this.description = '',
+    this.version = '1.0.0',
+    this.author = 'system',
+    this.type = 'builtin',
+    this.icon = '◆',
+    this.manifest,
+    this.directory,
+    this.isAvailable = true,
+    this.requiresConfirmation = false,
+    this.timeoutSeconds = 30,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        if (id != null) 'id': id,
+        'app_id': appId,
+        'name': name,
+        'description': description,
+        'version': version,
+        'author': author,
+        'type': type,
+        'icon': icon,
+        if (manifest != null) 'manifest': manifest,
+        if (directory != null) 'directory': directory,
+        'is_available': isAvailable,
+        'requires_confirmation': requiresConfirmation,
+        'timeout_seconds': timeoutSeconds,
+      };
+
+  factory AppRecord.fromJson(Map<String, dynamic> json) => AppRecord(
+        id: json['id'] as int?,
+        appId: json['app_id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        version: json['version'] as String? ?? '1.0.0',
+        author: json['author'] as String? ?? 'system',
+        type: json['type'] as String? ?? 'builtin',
+        icon: json['icon'] as String? ?? '◆',
+        manifest: json['manifest'] as String?,
+        directory: json['directory'] as String?,
+        isAvailable: json['is_available'] as bool? ?? true,
+        requiresConfirmation: json['requires_confirmation'] as bool? ?? false,
+        timeoutSeconds: json['timeout_seconds'] as int? ?? 30,
+        createdAt: json['created_at'] as String?,
+        updatedAt: json['updated_at'] as String?,
+      );
+}
+
+class AgentAppRecord {
+  final int? id;
+  final String agentId;
+  final String appId;
+  final bool isEnabled;
+  final String? config;
+  final String? installedAt;
+  final String? updatedAt;
+
+  AgentAppRecord({
+    this.id,
+    required this.agentId,
+    required this.appId,
+    this.isEnabled = true,
+    this.config,
+    this.installedAt,
+    this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        if (id != null) 'id': id,
+        'agent_id': agentId,
+        'app_id': appId,
+        'is_enabled': isEnabled,
+        if (config != null) 'config': config,
+      };
+
+  factory AgentAppRecord.fromJson(Map<String, dynamic> json) => AgentAppRecord(
+        id: json['id'] as int?,
+        agentId: json['agent_id'] as String? ?? '',
+        appId: json['app_id'] as String? ?? '',
+        isEnabled: json['is_enabled'] as bool? ?? true,
+        config: json['config'] as String?,
+        installedAt: json['installed_at'] as String?,
+        updatedAt: json['updated_at'] as String?,
+      );
+}
+
+class AgentRuntime {
+  final AgentRecord agent;
+  final List<Map<String, dynamic>> recentActions;
+  final List<Map<String, dynamic>> notes;
+  final int notesCount;
+  final int diaryCount;
+  final String? latestDiary;
+  final int alarmsCount;
+  final List<Map<String, dynamic>> alarms;
+  final List<Map<String, dynamic>> openTabs;
+  final int installedAppsCount;
+  final int enabledAppsCount;
+  final int contextWindow;
+
+  AgentRuntime({
+    required this.agent,
+    this.recentActions = const [],
+    this.notes = const [],
+    this.notesCount = 0,
+    this.diaryCount = 0,
+    this.latestDiary,
+    this.alarmsCount = 0,
+    this.alarms = const [],
+    this.openTabs = const [],
+    this.installedAppsCount = 0,
+    this.enabledAppsCount = 0,
+    this.contextWindow = 4096,
+  });
+
+  factory AgentRuntime.fromJson(Map<String, dynamic> json) {
+    final agentJson = json['agent'] as Map<String, dynamic>? ?? {};
+    return AgentRuntime(
+      agent: AgentRecord.fromJson(agentJson),
+      recentActions: (json['recent_actions'] as List<dynamic>?)
+              ?.map((e) => e as Map<String, dynamic>)
+              .toList() ??
+          [],
+      notes: (json['notes'] as List<dynamic>?)
+              ?.map((e) => e as Map<String, dynamic>)
+              .toList() ??
+          [],
+      notesCount: json['notes_count'] as int? ?? 0,
+      diaryCount: json['diary_count'] as int? ?? 0,
+      latestDiary: json['latest_diary'] as String?,
+      alarmsCount: json['alarms_count'] as int? ?? 0,
+      alarms: (json['alarms'] as List<dynamic>?)
+              ?.map((e) => e as Map<String, dynamic>)
+              .toList() ??
+          [],
+      openTabs: (json['open_tabs'] as List<dynamic>?)
+              ?.map((e) => e as Map<String, dynamic>)
+              .toList() ??
+          [],
+      installedAppsCount: json['installed_apps_count'] as int? ?? 0,
+      enabledAppsCount: json['enabled_apps_count'] as int? ?? 0,
+      contextWindow: json['context_window'] as int? ?? 4096,
+    );
+  }
 }
 
 class EndpointStatus {
