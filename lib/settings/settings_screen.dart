@@ -48,6 +48,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   final List<AgentRecord> _agents = [];
   final List<AppRecord> _apps = [];
   bool _loading = true;
+  bool _sidebarExpanded = true;
 
   @override
   void initState() {
@@ -57,8 +58,13 @@ class _SettingsScreenState extends State<SettingsScreen>
     _settingsService = SettingsService(widget.apiClient);
     _appService = AppService(widget.apiClient);
     _tabController = TabController(length: 10, vsync: this);
+    _tabController.addListener(_onTabChanged);
     _loadAll();
     widget.backendService.addListener(_onBackendChanged);
+  }
+
+  void _onTabChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -463,100 +469,207 @@ class _SettingsScreenState extends State<SettingsScreen>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: TabBar(
-              controller: _tabController,
-              isScrollable: true,
-              labelPadding: const EdgeInsets.symmetric(horizontal: 4),
-              indicator: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: Theme.of(context).colorScheme.primaryContainer,
+      ),
+      body: Row(
+        children: [
+          _buildSidebar(),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      ConnectionTab(
+                        apiClient: widget.apiClient,
+                        backendService: widget.backendService,
+                        onDisconnect: widget.onDisconnect,
+                      ),
+                      ProvidersTab(
+                        providers: _providers,
+                        providerService: _providerService,
+                        onDelete: _deleteProvider,
+                        onEdit: (p) => _openProviderForm(p),
+                        onAdd: () => _openProviderForm(null),
+                        onManageModels: _manageModels,
+                      ),
+                      ModelsTab(
+                        providers: _providers,
+                        providerService: _providerService,
+                        onReload: _loadProviders,
+                      ),
+                      AgentsTab(
+                        agents: _agents,
+                        onDelete: _deleteAgent,
+                        onAdd: _addAgent,
+                        onEditContextWindow: _editContextWindow,
+                        onEditPastActions: _editPastActions,
+                        onToggleField: _updateAgentField,
+                        onLinkModel: _linkModel,
+                        onViewDiary: _viewDiary,
+                      ),
+                      AppsTab(
+                        apiClient: widget.apiClient,
+                        appService: _appService,
+                        agents: _agents,
+                        onRefresh: _loadApps,
+                      ),
+                      NotesTab(
+                        apiClient: widget.apiClient,
+                        agents: _agents,
+                      ),
+                      DiaryTab(
+                        apiClient: widget.apiClient,
+                        agents: _agents,
+                      ),
+                      AlarmsTab(
+                        apiClient: widget.apiClient,
+                        agents: _agents,
+                      ),
+                      TimeTab(
+                        apiClient: widget.apiClient,
+                      ),
+                      SecurityTab(
+                        settingsService: _settingsService,
+                        apiClient: widget.apiClient,
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebar() {
+    const tabItems = <_TabItem>[
+      _TabItem(icon: Icons.info_outline, label: 'Connection'),
+      _TabItem(icon: Icons.cloud, label: 'Providers'),
+      _TabItem(icon: Icons.smart_toy, label: 'Models'),
+      _TabItem(icon: Icons.person, label: 'Agents'),
+      _TabItem(icon: Icons.apps, label: 'Apps'),
+      _TabItem(icon: Icons.note, label: 'Notes'),
+      _TabItem(icon: Icons.book, label: 'Diary'),
+      _TabItem(icon: Icons.alarm, label: 'Alarms'),
+      _TabItem(icon: Icons.schedule, label: 'Time'),
+      _TabItem(icon: Icons.lock, label: 'Security'),
+    ];
+    final theme = Theme.of(context);
+    return Material(
+      elevation: 1,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: _sidebarExpanded ? 200 : 56,
+        color: theme.colorScheme.surfaceContainerLow,
+        child: Column(
+          children: [
+            SizedBox(
+              height: 44,
+              child: InkWell(
+                onTap: () =>
+                    setState(() => _sidebarExpanded = !_sidebarExpanded),
+                child: Container(
+                  alignment: Alignment.center,
+                  child: AnimatedRotation(
+                    duration: const Duration(milliseconds: 200),
+                    turns: _sidebarExpanded ? 0.0 : 0.5,
+                    child: Icon(
+                      Icons.chevron_left,
+                      size: 22,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
               ),
-              indicatorSize: TabBarIndicatorSize.tab,
-              dividerColor: Colors.transparent,
-              unselectedLabelColor:
-                  Theme.of(context).colorScheme.onSurfaceVariant,
-              labelColor:
-                  Theme.of(context).colorScheme.onPrimaryContainer,
-              tabs: const [
-            Tab(icon: Icon(Icons.info_outline, size: 18), text: 'Connection'),
-            Tab(icon: Icon(Icons.cloud, size: 18), text: 'Providers'),
-            Tab(icon: Icon(Icons.smart_toy, size: 18), text: 'Models'),
-            Tab(icon: Icon(Icons.person, size: 18), text: 'Agents'),
-            Tab(icon: Icon(Icons.apps, size: 18), text: 'Apps'),
-            Tab(icon: Icon(Icons.note, size: 18), text: 'Notes'),
-            Tab(icon: Icon(Icons.book, size: 18), text: 'Diary'),
-            Tab(icon: Icon(Icons.alarm, size: 18), text: 'Alarms'),
-            Tab(icon: Icon(Icons.schedule, size: 18), text: 'Time'),
-            Tab(icon: Icon(Icons.lock, size: 18), text: 'Security'),
-          ],
             ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                children: [
+                  for (int i = 0; i < tabItems.length; i++)
+                    _SidebarItem(
+                      icon: tabItems[i].icon,
+                      label: tabItems[i].label,
+                      selected: _tabController.index == i,
+                      expanded: _sidebarExpanded,
+                      onTap: () => _tabController.animateTo(i),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TabItem {
+  final IconData icon;
+  final String label;
+  const _TabItem({required this.icon, required this.label});
+}
+
+class _SidebarItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  const _SidebarItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      child: Material(
+        color:
+            selected ? theme.colorScheme.primaryContainer : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: expanded
+                ? Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      Icon(icon,
+                          size: 20,
+                          color: selected
+                              ? theme.colorScheme.onPrimaryContainer
+                              : theme.colorScheme.onSurfaceVariant),
+                      const SizedBox(width: 12),
+                      Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: selected
+                              ? theme.colorScheme.onPrimaryContainer
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  )
+                : Center(
+                    child: Icon(icon,
+                        size: 20,
+                        color: selected
+                            ? theme.colorScheme.onPrimaryContainer
+                            : theme.colorScheme.onSurfaceVariant),
+                  ),
           ),
         ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                ConnectionTab(
-                  apiClient: widget.apiClient,
-                  backendService: widget.backendService,
-                  onDisconnect: widget.onDisconnect,
-                ),
-                ProvidersTab(
-                  providers: _providers,
-                  providerService: _providerService,
-                  onDelete: _deleteProvider,
-                  onEdit: (p) => _openProviderForm(p),
-                  onAdd: () => _openProviderForm(null),
-                  onManageModels: _manageModels,
-                ),
-                ModelsTab(
-                  providers: _providers,
-                  providerService: _providerService,
-                  onReload: _loadProviders,
-                ),
-                AgentsTab(
-                  agents: _agents,
-                  onDelete: _deleteAgent,
-                  onAdd: _addAgent,
-                  onEditContextWindow: _editContextWindow,
-                  onEditPastActions: _editPastActions,
-                  onToggleField: _updateAgentField,
-                  onLinkModel: _linkModel,
-                  onViewDiary: _viewDiary,
-                ),
-                AppsTab(
-                  apiClient: widget.apiClient,
-                  appService: _appService,
-                  agents: _agents,
-                  onRefresh: _loadApps,
-                ),
-                NotesTab(
-                  apiClient: widget.apiClient,
-                  agents: _agents,
-                ),
-                DiaryTab(
-                  apiClient: widget.apiClient,
-                  agents: _agents,
-                ),
-                AlarmsTab(
-                  apiClient: widget.apiClient,
-                  agents: _agents,
-                ),
-                TimeTab(
-                  apiClient: widget.apiClient,
-                ),
-                SecurityTab(
-                  settingsService: _settingsService,
-                  apiClient: widget.apiClient,
-                ),
-              ],
-            ),
     );
   }
 }

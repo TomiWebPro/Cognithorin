@@ -17,8 +17,11 @@ class RuntimeService {
     return AgentRuntime.fromJson(data);
   }
 
-  Future<String> getAgentContext(String agentId) async {
+  Future<Map<String, dynamic>> getAgentContext(String agentId) async {
     final data = await _client.get('/agents/$agentId/context');
-    return data['context'] as String? ?? '';
+    return {
+      'context': data['context'] as String? ?? '',
+      'last_updated': data['last_updated'] as String?,
+    };
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../services/api_service/api_client.dart';
 
@@ -13,9 +15,11 @@ class TimeTab extends StatefulWidget {
 class _TimeTabState extends State<TimeTab> {
   bool _loading = true;
   bool _saving = false;
+  bool _initialized = false;
+  Timer? _autoSaveTimer;
   final _realEpochCtrl = TextEditingController();
   final _agentEpochCtrl = TextEditingController();
-  final _ratioCtrl = TextEditingController();
+  double _ratioSliderValue = 0.5;
 
   @override
   void initState() {
@@ -25,9 +29,9 @@ class _TimeTabState extends State<TimeTab> {
 
   @override
   void dispose() {
+    _autoSaveTimer?.cancel();
     _realEpochCtrl.dispose();
     _agentEpochCtrl.dispose();
-    _ratioCtrl.dispose();
     super.dispose();
   }
 
@@ -39,15 +43,30 @@ class _TimeTabState extends State<TimeTab> {
       setState(() {
         _realEpochCtrl.text = data['real_epoch']?.toString() ?? '';
         _agentEpochCtrl.text = data['agent_epoch']?.toString() ?? '';
-        _ratioCtrl.text = data['ratio']?.toString() ?? '';
+        final ratio = (data['ratio'] as num?)?.toDouble() ?? 1.0;
+        _ratioSliderValue = ((log(ratio) / ln10) + 2) / 4;
         _loading = false;
+        _initialized = true;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _initialized = true;
+        });
+      }
     }
   }
 
-  Future<void> _saveConfig() async {
+  void _scheduleAutoSave() {
+    if (!_initialized) return;
+    _autoSaveTimer?.cancel();
+    _autoSaveTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) _saveConfig(showSnack: false);
+    });
+  }
+
+  Future<void> _saveConfig({bool showSnack = true}) async {
     setState(() => _saving = true);
     try {
       final body = <String, dynamic>{};
@@ -57,23 +76,38 @@ class _TimeTabState extends State<TimeTab> {
       if (_agentEpochCtrl.text.trim().isNotEmpty) {
         body['agent_epoch'] = _agentEpochCtrl.text.trim();
       }
-      if (_ratioCtrl.text.trim().isNotEmpty) {
-        body['ratio'] = double.tryParse(_ratioCtrl.text.trim()) ?? 1.0;
-      }
+      body['ratio'] = pow(10, (_ratioSliderValue * 4) - 2).toDouble();
       await widget.apiClient.put('/time/config', body: body);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: const Text('Time config saved'), backgroundColor: Colors.green.shade600),
-      );
-      _loadConfig();
+      if (showSnack) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: const Text('Time config saved'), backgroundColor: Colors.green.shade600),
+        );
+      }
+      _silentRefresh();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
-      );
+      if (showSnack) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Theme.of(context).colorScheme.error),
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _silentRefresh() async {
+    try {
+      final data = await widget.apiClient.get('/time/config');
+      if (!mounted) return;
+      setState(() {
+        _realEpochCtrl.text = data['real_epoch']?.toString() ?? '';
+        _agentEpochCtrl.text = data['agent_epoch']?.toString() ?? '';
+        final ratio = (data['ratio'] as num?)?.toDouble() ?? 1.0;
+        _ratioSliderValue = ((log(ratio) / ln10) + 2) / 4;
+      });
+    } catch (_) {}
   }
 
   Future<void> _resetToDefaults() async {
@@ -90,6 +124,7 @@ class _TimeTabState extends State<TimeTab> {
     );
     if (confirm != true) return;
 
+    _autoSaveTimer?.cancel();
     setState(() => _saving = true);
     try {
       await widget.apiClient.put('/time/config', body: {
@@ -97,7 +132,7 @@ class _TimeTabState extends State<TimeTab> {
         'agent_epoch': '1970-01-01T00:00:00+00:00',
         'ratio': 1.0,
       });
-      await _loadConfig();
+      await _silentRefresh();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: const Text('Time config reset to defaults'), backgroundColor: Colors.green.shade600),
@@ -110,6 +145,101 @@ class _TimeTabState extends State<TimeTab> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _pickEpoch(TextEditingController controller) async {
+    final current = DateTime.tryParse(controller.text) ?? DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: current,
+      firstDate: DateTime(1970),
+      lastDate: DateTime(2100),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(current),
+    );
+    if (time == null) return;
+    final picked = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    controller.text = picked.toUtc().toIso8601String();
+    _scheduleAutoSave();
+  }
+
+  String _formatEpoch(String iso) {
+    if (iso.isEmpty) return 'Not set';
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return iso;
+    final y = dt.year.toString();
+    final mo = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$y-$mo-$d  $h:$mi:$s UTC';
+  }
+
+  Widget _buildEpochPicker({
+    required TextEditingController controller,
+    required String label,
+  }) {
+    return InkWell(
+      onTap: () => _pickEpoch(controller),
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          isDense: true,
+          suffixIcon: Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Icon(Icons.edit_calendar, size: 20),
+          ),
+        ),
+        child: Text(
+          _formatEpoch(controller.text),
+          style: const TextStyle(fontSize: 13),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRatioSlider() {
+    final ratio = pow(10, (_ratioSliderValue * 4) - 2).toDouble();
+    String label;
+    if (ratio < 0.99) {
+      label = '${ratio.toStringAsFixed(2)}× slower';
+    } else if (ratio > 1.01) {
+      label = '${ratio.toStringAsFixed(2)}× faster';
+    } else {
+      label = '1.0× normal';
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Time Ratio (real:agent)', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Text('0.01', style: TextStyle(fontSize: 11)),
+            Expanded(
+              child: Slider(
+                value: _ratioSliderValue.clamp(0.0, 1.0),
+                min: 0.0,
+                max: 1.0,
+                divisions: 200,
+                onChanged: (v) {
+                  setState(() => _ratioSliderValue = v);
+                  _scheduleAutoSave();
+                },
+              ),
+            ),
+            const Text('100', style: TextStyle(fontSize: 11)),
+          ],
+        ),
+        Center(child: Text(label, style: const TextStyle(fontSize: 13))),
+      ],
+    );
   }
 
   @override
@@ -133,45 +263,29 @@ class _TimeTabState extends State<TimeTab> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: _realEpochCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Real Epoch (ISO 8601)',
-                      border: OutlineInputBorder(),
-                      isDense: true),
-                  style: const TextStyle(fontSize: 13),
-                ),
+                _buildEpochPicker(controller: _realEpochCtrl, label: 'Real Epoch'),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: _agentEpochCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Agent Epoch (ISO 8601)',
-                      border: OutlineInputBorder(),
-                      isDense: true),
-                  style: const TextStyle(fontSize: 13),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _ratioCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Ratio (real:agent)',
-                      border: OutlineInputBorder(),
-                      isDense: true),
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(fontSize: 13),
-                ),
+                _buildEpochPicker(controller: _agentEpochCtrl, label: 'Agent Epoch'),
                 const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _saving ? null : _saveConfig,
-                    child: _saving
-                        ? const SizedBox(
-                            width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Save'),
+                _buildRatioSlider(),
+                const SizedBox(height: 16),
+                if (_saving)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 14, height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                          Text('Saving...', style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton(

@@ -32,6 +32,9 @@ class _ConnectionTabState extends State<ConnectionTab> {
     super.initState();
     widget.backendService.addListener(_onServiceChanged);
     widget.backendService.startMonitoring();
+    if (widget.backendService.isConnected) {
+      _fetchPasskey();
+    }
   }
 
   @override

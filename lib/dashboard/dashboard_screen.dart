@@ -28,6 +28,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late final AgentService _agentService;
   List<AgentRuntime> _runtimes = [];
   bool _loading = true;
+  bool _contextDialogOpen = false;
 
   @override
   void initState() {
@@ -86,73 +87,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _viewContext(AgentRuntime runtime) async {
+    if (_contextDialogOpen) return;
+    _contextDialogOpen = true;
     final a = runtime.agent;
-    try {
-      final ctxText = await _runtimeService.getAgentContext(a.agentId);
-      if (!mounted || ctxText.isEmpty) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Theme.of(context).dividerColor),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.visibility, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Context — ${a.name}',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20),
-                  child: SelectableText(
-                    ctxText,
-                    style: const TextStyle(fontSize: 13, height: 1.5),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          icon: const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 36),
-          title: const Text('Failed to load context'),
-          content: Text('$e'),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _AgentContextDialog(
+        agentName: a.name,
+        future: _runtimeService.getAgentContext(a.agentId),
+      ),
+    ).then((_) {
+      if (mounted) _contextDialogOpen = false;
+    });
   }
 
   void _openSettings() {
@@ -291,6 +239,151 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     },
                   ),
                 ),
+    );
+  }
+}
+
+class _AgentContextDialog extends StatefulWidget {
+  final String agentName;
+  final Future<Map<String, dynamic>> future;
+
+  const _AgentContextDialog({
+    required this.agentName,
+    required this.future,
+  });
+
+  @override
+  State<_AgentContextDialog> createState() => _AgentContextDialogState();
+}
+
+class _AgentContextDialogState extends State<_AgentContextDialog> {
+  String? _content;
+  String? _lastUpdated;
+  String? _error;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await widget.future;
+      if (!mounted) return;
+      setState(() {
+        _content = data['context'] as String? ?? '';
+        _lastUpdated = data['last_updated'] as String?;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: Theme.of(context).dividerColor),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.visibility, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Context — ${widget.agentName}',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          Flexible(
+            child: _loading
+                ? const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Loading context...'),
+                        ],
+                      ),
+                    ),
+                  )
+                : _error != null
+                    ? Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 36),
+                            const SizedBox(height: 12),
+                            const Text('Failed to load context',
+                                style: TextStyle(fontWeight: FontWeight.w500)),
+                            const SizedBox(height: 8),
+                            Text(_error!,
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: Theme.of(context).colorScheme.error)),
+                            const SizedBox(height: 16),
+                            FilledButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Close'),
+                            ),
+                          ],
+                        ),
+                      )
+                    : _content!.isEmpty
+                        ? const Center(child: Text('Context is empty'))
+                        : SingleChildScrollView(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (_lastUpdated != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Text(
+                                      'Last updated: ${_lastUpdated!.replaceFirst('T', ' ').replaceFirst(RegExp(r'\..*'), '')}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                SelectableText(
+                                  _content!,
+                                  style: const TextStyle(fontSize: 13, height: 1.5),
+                                ),
+                              ],
+                            ),
+                          ),
+          ),
+        ],
+      ),
     );
   }
 }
