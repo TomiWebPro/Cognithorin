@@ -6,6 +6,7 @@ import '../services/api_service/models.dart';
 import '../services/backend_service.dart';
 import '../settings/settings_screen.dart';
 import 'agent_card.dart';
+import 'stats_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final ApiClient apiClient;
@@ -103,8 +104,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  void _openSettings() {
-    Navigator.push(
+  Future<void> _openStats() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatsScreen(apiClient: widget.apiClient),
+      ),
+    );
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => SettingsScreen(
@@ -114,6 +124,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
+    _load();
   }
 
   void _showAgentDetail(AgentRuntime runtime) {
@@ -190,6 +201,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         title: const Text('Cognithor'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            tooltip: 'Token Stats',
+            onPressed: _openStats,
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Settings',

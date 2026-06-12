@@ -413,6 +413,99 @@ class AgentRuntime {
   }
 }
 
+class PeriodTokenUsage {
+  final int inputTokens;
+  final int outputTokens;
+  final double cost;
+  final int runs;
+
+  PeriodTokenUsage({
+    this.inputTokens = 0,
+    this.outputTokens = 0,
+    this.cost = 0.0,
+    this.runs = 0,
+  });
+
+  factory PeriodTokenUsage.fromJson(Map<String, dynamic> json) =>
+      PeriodTokenUsage(
+        inputTokens: json['input_tokens'] as int? ?? 0,
+        outputTokens: json['output_tokens'] as int? ?? 0,
+        cost: (json['cost'] as num?)?.toDouble() ?? 0.0,
+        runs: json['runs'] as int? ?? 0,
+      );
+}
+
+class AgentTokenSummary {
+  final String name;
+  final Map<String, PeriodTokenUsage> periods;
+
+  AgentTokenSummary({required this.name, required this.periods});
+
+  factory AgentTokenSummary.fromJson(
+          String agentId, Map<String, dynamic> json) =>
+      AgentTokenSummary(
+        name: json['_name'] as String? ?? agentId,
+        periods: json.entries
+            .where((e) => e.key != '_name')
+            .fold<Map<String, PeriodTokenUsage>>({}, (map, e) {
+          map[e.key] = PeriodTokenUsage.fromJson(
+              e.value as Map<String, dynamic>);
+          return map;
+        }),
+      );
+}
+
+class TimingBreakdown {
+  final double generatingMs;
+  final double harnessMs;
+  final double waitRequestedMs;
+  final double totalMs;
+  final int runs;
+
+  TimingBreakdown({
+    this.generatingMs = 0.0,
+    this.harnessMs = 0.0,
+    this.waitRequestedMs = 0.0,
+    this.totalMs = 0.0,
+    this.runs = 0,
+  });
+
+  factory TimingBreakdown.fromJson(Map<String, dynamic> json) =>
+      TimingBreakdown(
+        generatingMs: (json['generating_ms'] as num?)?.toDouble() ?? 0.0,
+        harnessMs: (json['harness_ms'] as num?)?.toDouble() ?? 0.0,
+        waitRequestedMs:
+            (json['wait_requested_ms'] as num?)?.toDouble() ?? 0.0,
+        totalMs: (json['total_ms'] as num?)?.toDouble() ?? 0.0,
+        runs: json['runs'] as int? ?? 0,
+      );
+
+  double get remainingMs => totalMs - generatingMs - harnessMs;
+  double get generatingPct =>
+      totalMs > 0 ? (generatingMs / totalMs) * 100 : 0;
+  double get harnessPct => totalMs > 0 ? (harnessMs / totalMs) * 100 : 0;
+  double get waitPct =>
+      totalMs > 0 ? (waitRequestedMs / totalMs) * 100 : 0;
+  double get idlePct {
+    final accounted = generatingMs + harnessMs + waitRequestedMs;
+    return totalMs > 0
+        ? ((totalMs - accounted) / totalMs).clamp(0, 1) * 100
+        : 0;
+  }
+
+  String get generatingLabel => _fmtMs(generatingMs);
+  String get harnessLabel => _fmtMs(harnessMs);
+  String get waitLabel => _fmtMs(waitRequestedMs);
+  String get idleLabel => _fmtMs(remainingMs);
+  String get totalLabel => _fmtMs(totalMs);
+
+  static String _fmtMs(double ms) {
+    if (ms >= 60000) return '${(ms / 60000).toStringAsFixed(1)}m';
+    if (ms >= 1000) return '${(ms / 1000).toStringAsFixed(1)}s';
+    return '${ms.toStringAsFixed(0)}ms';
+  }
+}
+
 class EndpointStatus {
   final String provider;
   final bool available;

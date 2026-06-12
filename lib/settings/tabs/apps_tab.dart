@@ -27,34 +27,61 @@ class _AppsTabState extends State<AppsTab> {
   List<AppRecord> _apps = [];
   Map<String, List<AgentAppRecord>> _agentApps = {};
   bool _loading = true;
+  final Set<String> _togglingApps = {};
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _fullLoad();
   }
 
-  Future<void> _load() async {
+  Future<void> _fullLoad() async {
     setState(() => _loading = true);
     try {
-      final apps = await widget.appService.getApps(all: true);
-      final agentApps = <String, List<AgentAppRecord>>{};
-      for (final agent in widget.agents) {
-        try {
-          agentApps[agent.agentId] = await widget.appService.getAgentApps(agent.agentId);
-        } catch (_) {
-          agentApps[agent.agentId] = [];
-        }
-      }
-      if (!mounted) return;
-      setState(() {
-        _apps = apps;
-        _agentApps = agentApps;
-        _loading = false;
-      });
-    } catch (_) {
+      await _refreshData();
+    } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _backgroundRefresh() async {
+    try {
+      await _refreshData();
+    } catch (_) {}
+  }
+
+  Future<void> _refreshData() async {
+    final apps = await widget.appService.getApps(all: true);
+    final agentApps = <String, List<AgentAppRecord>>{};
+    for (final agent in widget.agents) {
+      try {
+        agentApps[agent.agentId] = await widget.appService.getAgentApps(agent.agentId);
+      } catch (_) {
+        agentApps[agent.agentId] = [];
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _apps = apps;
+      _agentApps = agentApps;
+    });
+  }
+
+  void _updateLocalAppState(String agentId, String appId, bool enabled) {
+    final apps = _agentApps[agentId];
+    if (apps == null) return;
+    final idx = apps.indexWhere((a) => a.appId == appId);
+    if (idx < 0) return;
+    final old = apps[idx];
+    apps[idx] = AgentAppRecord(
+      id: old.id,
+      agentId: old.agentId,
+      appId: old.appId,
+      isEnabled: enabled,
+      config: old.config,
+      installedAt: old.installedAt,
+      updatedAt: old.updatedAt,
+    );
   }
 
   void _showAppDetails(AppRecord app) {
@@ -235,7 +262,7 @@ class _AppsTabState extends State<AppsTab> {
               try {
                 await widget.appService.setAppConfig(agent.agentId, app.appId, values);
                 _showSuccess('Configuration saved');
-                _load();
+                _backgroundRefresh();
               } catch (e) {
                 _showError(e.toString());
               }
@@ -263,7 +290,7 @@ class _AppsTabState extends State<AppsTab> {
             const Text('Apps are auto-discovered from server', style: TextStyle(fontSize: 13, color: Colors.grey)),
             const SizedBox(height: 16),
             OutlinedButton.icon(
-              onPressed: _load,
+              onPressed: _fullLoad,
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text('Refresh'),
             ),
@@ -345,20 +372,19 @@ class _AppsTabState extends State<AppsTab> {
                                             fontWeight: installed != null ? FontWeight.w600 : null)),
                                   ),
                                   if (installed != null) ...[
-                                    Text(isEnabled ? 'ON' : 'OFF',
-                                        style: TextStyle(fontSize: 11,
-                                            color: isEnabled ? Colors.green : Colors.grey)),
+                                    SizedBox(
+                                      height: 32,
+                                      child: Switch(
+                                        value: isEnabled,
+                                        onChanged: (_) => _toggleApp(agent.agentId, app.appId, isEnabled),
+                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                    ),
                                     IconButton(
                                       icon: const Icon(Icons.settings, size: 18),
                                       onPressed: () => _configureApp(agent, installed, app),
                                       visualDensity: VisualDensity.compact,
                                       tooltip: 'Configure',
-                                    ),
-                                    IconButton(
-                                      icon: Icon(isEnabled ? Icons.toggle_on : Icons.toggle_off_outlined,
-                                          size: 20),
-                                      onPressed: () => _toggleApp(agent.agentId, app.appId, isEnabled),
-                                      visualDensity: VisualDensity.compact,
                                     ),
                                     IconButton(
                                       icon: const Icon(Icons.delete_outline, size: 18),
@@ -390,7 +416,7 @@ class _AppsTabState extends State<AppsTab> {
           bottom: 16,
           child: FloatingActionButton(
             heroTag: 'refresh_apps',
-            onPressed: _load,
+            onPressed: _fullLoad,
             child: const Icon(Icons.refresh),
           ),
         ),
@@ -402,7 +428,7 @@ class _AppsTabState extends State<AppsTab> {
     try {
       await widget.appService.installApp(agentId, appId);
       _showSuccess('App installed');
-      _load();
+      _backgroundRefresh();
     } catch (e) {
       _showError(e.toString());
     }
@@ -412,22 +438,33 @@ class _AppsTabState extends State<AppsTab> {
     try {
       await widget.appService.uninstallApp(agentId, appId);
       _showSuccess('App uninstalled');
-      _load();
+      _backgroundRefresh();
     } catch (e) {
       _showError(e.toString());
     }
   }
 
   Future<void> _toggleApp(String agentId, String appId, bool enabled) async {
+    final key = '$agentId:$appId';
+    if (_togglingApps.contains(key)) return;
+    _togglingApps.add(key);
+
+    _updateLocalAppState(agentId, appId, !enabled);
+    if (mounted) setState(() {});
+
     try {
       if (enabled) {
         await widget.appService.disableApp(agentId, appId);
       } else {
         await widget.appService.enableApp(agentId, appId);
       }
-      _load();
+      _backgroundRefresh();
     } catch (e) {
-      _showError(e.toString());
+      _updateLocalAppState(agentId, appId, enabled);
+      if (mounted) setState(() {});
+      if (mounted) _showError(e.toString());
+    } finally {
+      _togglingApps.remove(key);
     }
   }
 
