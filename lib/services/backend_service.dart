@@ -214,9 +214,11 @@ class BackendConnectionService extends ChangeNotifier {
   }
 
   Future<String?> autoDetect() async {
-    for (final url in _defaultUrls) {
-      final success = await tryConnect(url);
-      if (success) return url;
+    final results = await Future.wait(
+      _defaultUrls.map((url) => tryConnect(url)),
+    );
+    for (int i = 0; i < _defaultUrls.length; i++) {
+      if (results[i]) return _defaultUrls[i];
     }
     return null;
   }

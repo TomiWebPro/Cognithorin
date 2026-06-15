@@ -137,7 +137,7 @@ class AgentRecord {
   final bool showNotes;
   final bool showDiary;
   final bool showTime;
-  final String status;
+  String status;
   final String? createdAt;
   final String? updatedAt;
 

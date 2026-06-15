@@ -35,6 +35,7 @@ class _ConnectContentState extends State<ConnectContent> {
   String? _detectedUrl;
   OnboardingPasskey? _pendingPasskey;
   bool _showPasskeyInput = false;
+  String _detectStatus = '';
 
   @override
   void initState() {
@@ -66,6 +67,7 @@ class _ConnectContentState extends State<ConnectContent> {
       _isDetecting = true;
       _error = null;
       _detectedUrl = null;
+      _detectStatus = 'Scanning common ports...';
     });
 
     final detected = await widget.backendService.autoDetect();
@@ -76,7 +78,9 @@ class _ConnectContentState extends State<ConnectContent> {
       _isDetecting = false;
       if (detected != null) {
         _detectedUrl = detected;
+        _detectStatus = '';
       } else {
+        _detectStatus = '';
         _error =
             'No backend found on common ports. Enter address manually or scan/paste a passkey.';
       }
@@ -175,6 +179,7 @@ class _ConnectContentState extends State<ConnectContent> {
     setState(() {
       _isDetecting = true;
       _error = null;
+      _detectStatus = 'Connecting...';
     });
 
     final username = _usernameController.text.trim();
@@ -192,6 +197,7 @@ class _ConnectContentState extends State<ConnectContent> {
 
     setState(() {
       _isDetecting = false;
+      _detectStatus = '';
       if (success) {
         _detectedUrl = url;
         if (creds != null) {
@@ -267,11 +273,11 @@ class _ConnectContentState extends State<ConnectContent> {
           ),
           const SizedBox(height: 24),
           if (_isDetecting)
-            const Column(
+            Column(
               children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Scanning for backend...'),
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(_detectStatus),
               ],
             )
           else if (_detectedUrl != null && widget.backendService.backendInfo != null)

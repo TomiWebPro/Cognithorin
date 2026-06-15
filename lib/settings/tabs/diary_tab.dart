@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service/api_client.dart';
 import '../../services/api_service/models.dart';
+import '../../services/cancel_token.dart';
 
 class DiaryTab extends StatefulWidget {
   final ApiClient apiClient;
@@ -21,6 +22,7 @@ class _DiaryTabState extends State<DiaryTab> {
   List<DiaryEntry> _entries = [];
   bool _loading = false;
   final _dateCtrl = TextEditingController();
+  CancelToken? _cancelToken;
 
   @override
   void initState() {
@@ -34,19 +36,22 @@ class _DiaryTabState extends State<DiaryTab> {
   @override
   void dispose() {
     _dateCtrl.dispose();
+    _cancelToken?.cancel();
     super.dispose();
   }
 
   Future<void> _loadEntries() async {
     if (_selectedAgentId == null) return;
-    setState(() => _loading = true);
+    _cancelToken?.cancel();
+    _cancelToken = CancelToken();
+    if (!_loading) setState(() => _loading = true);
     try {
       var path = '/agents/$_selectedAgentId/diary';
       final dateFilter = _dateCtrl.text.trim();
       if (dateFilter.isNotEmpty) {
         path += '?date=$dateFilter';
       }
-      final data = await widget.apiClient.get(path);
+      final data = await widget.apiClient.get(path, cancelToken: _cancelToken);
       final entries = (data['entries'] as List<dynamic>?)
               ?.map((e) => DiaryEntry.fromJson(e as Map<String, dynamic>))
               .toList() ??
@@ -57,7 +62,9 @@ class _DiaryTabState extends State<DiaryTab> {
         _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _cancelToken?.isCancelled != true) {
+        setState(() => _loading = false);
+      }
     }
   }
 

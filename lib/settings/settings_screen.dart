@@ -7,6 +7,9 @@ import '../services/api_service/settings_service.dart';
 import '../services/api_service/app_service.dart';
 import '../services/api_service/models.dart';
 import '../services/backend_service.dart';
+import '../services/cache_service.dart';
+import '../reuseable_widgets/error_with_retry.dart';
+import '../reuseable_widgets/shimmer_widget.dart';
 import 'provider_form_screen.dart';
 import 'model_management_screen.dart';
 import 'tabs/connection_tab.dart';
@@ -43,12 +46,14 @@ class _SettingsScreenState extends State<SettingsScreen>
   late final SettingsService _settingsService;
   late final AppService _appService;
   late final TabController _tabController;
+  final DataCache _cache = DataCache.instance;
 
   final List<ProviderRecord> _providers = [];
   final List<AgentRecord> _agents = [];
   final List<AppRecord> _apps = [];
   bool _loading = true;
   bool _sidebarExpanded = true;
+  String? _error;
 
   @override
   void initState() {
@@ -59,8 +64,24 @@ class _SettingsScreenState extends State<SettingsScreen>
     _appService = AppService(widget.apiClient);
     _tabController = TabController(length: 10, vsync: this);
     _tabController.addListener(_onTabChanged);
+    _tryLoadFromCache();
     _loadAll();
     widget.backendService.addListener(_onBackendChanged);
+  }
+
+  void _tryLoadFromCache() {
+    final cachedProviders = _cache.get<List<ProviderRecord>>('settings:providers');
+    final cachedAgents = _cache.get<List<AgentRecord>>('settings:agents');
+    final cachedApps = _cache.get<List<AppRecord>>('settings:apps');
+
+    if (cachedProviders != null || cachedAgents != null || cachedApps != null) {
+      setState(() {
+        if (cachedProviders != null) _providers.addAll(cachedProviders);
+        if (cachedAgents != null) _agents.addAll(cachedAgents);
+        if (cachedApps != null) _apps.addAll(cachedApps);
+        _loading = false;
+      });
+    }
   }
 
   void _onTabChanged() {
@@ -81,33 +102,65 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _loadAll() async {
-    setState(() => _loading = true);
-    await Future.wait([_loadProviders(), _loadAgents(), _loadApps()]);
-    if (mounted) setState(() => _loading = false);
+    if (_loading == false && _providers.isNotEmpty && _agents.isNotEmpty && _apps.isNotEmpty) {
+      _refreshInBackground();
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await Future.wait([_loadProviders(), _loadAgents(), _loadApps()]);
+      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshInBackground() async {
+    try {
+      await Future.wait([_loadProviders(), _loadAgents(), _loadApps()]);
+    } catch (_) {}
   }
 
   Future<void> _loadProviders() async {
     try {
       final providers = await _providerService.getProviders();
+      _cache.set('settings:providers', providers, group: 'providers');
       if (!mounted) return;
       setState(() => _providers..clear()..addAll(providers));
-    } catch (_) {}
+    } catch (_) {
+      if (_providers.isEmpty) { rethrow; }
+    }
   }
 
   Future<void> _loadAgents() async {
     try {
       final agents = await _agentService.getAgents();
+      _cache.set('settings:agents', agents, group: 'agents');
       if (!mounted) return;
       setState(() => _agents..clear()..addAll(agents));
-    } catch (_) {}
+    } catch (_) {
+      if (_agents.isEmpty) { rethrow; }
+    }
   }
 
   Future<void> _loadApps() async {
     try {
       final apps = await _appService.getApps(all: true);
+      _cache.set('settings:apps', apps, group: 'apps');
       if (!mounted) return;
       setState(() => _apps..clear()..addAll(apps));
-    } catch (_) {}
+    } catch (_) {
+      if (_apps.isEmpty) { rethrow; }
+    }
   }
 
   void _showError(String msg) {
@@ -127,11 +180,13 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _deleteAgent(String agentId) async {
+    setState(() => _agents.removeWhere((a) => a.agentId == agentId));
     try {
       await _agentService.deleteAgent(agentId);
-      setState(() => _agents.removeWhere((a) => a.agentId == agentId));
+      _cache.invalidateGroup('agents');
       _showSuccess('Agent deleted');
     } catch (e) {
+      _loadAgents();
       _showError(e.toString());
     }
   }
@@ -178,6 +233,24 @@ class _SettingsScreenState extends State<SettingsScreen>
               final cw = int.tryParse(cwCtrl.text) ?? 4096;
               final pa = int.tryParse(paCtrl.text) ?? 15;
               Navigator.pop(ctx);
+
+              final tempId = '__temp_${DateTime.now().millisecondsSinceEpoch}';
+              final tempAgent = AgentRecord(
+                agentId: tempId,
+                name: name,
+                status: 'active',
+                contextWindow: cw,
+                maxPastActions: pa < 3 ? 3 : pa,
+                modelRef: null,
+                backupModelRef: null,
+                showContextWindow: true,
+                agentCanChangeMaxPastActions: false,
+                showNotes: true,
+                showDiary: true,
+                showTime: true,
+              );
+              setState(() => _agents.add(tempAgent));
+
               try {
                 final agent = await _agentService.createAgent({
                   'name': name,
@@ -188,10 +261,15 @@ class _SettingsScreenState extends State<SettingsScreen>
                   'show_diary': true,
                   'show_time': true,
                 });
+                _cache.invalidateGroup('agents');
                 if (!mounted) return;
-                setState(() => _agents.add(agent));
+                setState(() {
+                  _agents.removeWhere((a) => a.agentId == tempId);
+                  _agents.add(agent);
+                });
                 _showSuccess('Agent $name created');
               } catch (e) {
+                setState(() => _agents.removeWhere((a) => a.agentId == tempId));
                 _showError(e.toString());
               }
             },
@@ -203,14 +281,32 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _updateAgentField(String agentId, Map<String, dynamic> fields) async {
+    final idx = _agents.indexWhere((a) => a.agentId == agentId);
+    if (idx < 0) return;
+    final oldAgent = _agents[idx];
+
+    final updated = AgentRecord(
+      id: oldAgent.id,
+      agentId: oldAgent.agentId,
+      name: oldAgent.name,
+      status: fields['status'] as String? ?? oldAgent.status,
+      contextWindow: fields['context_window'] as int? ?? oldAgent.contextWindow,
+      maxPastActions: fields['max_past_actions'] as int? ?? oldAgent.maxPastActions,
+      modelRef: fields['model_ref'] as String? ?? oldAgent.modelRef,
+      backupModelRef: fields['backup_model_ref'] as String? ?? oldAgent.backupModelRef,
+      showContextWindow: fields['show_context_window'] as bool? ?? oldAgent.showContextWindow,
+      agentCanChangeMaxPastActions: fields['agent_can_change_max_past_actions'] as bool? ?? oldAgent.agentCanChangeMaxPastActions,
+      showNotes: fields['show_notes'] as bool? ?? oldAgent.showNotes,
+      showDiary: fields['show_diary'] as bool? ?? oldAgent.showDiary,
+      showTime: fields['show_time'] as bool? ?? oldAgent.showTime,
+    );
+    setState(() => _agents[idx] = updated);
+
     try {
-      final updated = await _agentService.updateAgent(agentId, fields);
-      if (!mounted) return;
-      setState(() {
-        final idx = _agents.indexWhere((a) => a.agentId == agentId);
-        if (idx >= 0) _agents[idx] = updated;
-      });
+      await _agentService.updateAgent(agentId, fields);
+      _cache.invalidateGroup('agents');
     } catch (e) {
+      setState(() => _agents[idx] = oldAgent);
       _showError(e.toString());
     }
   }
@@ -365,11 +461,16 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _deleteProvider(String name) async {
+    final idx = _providers.indexWhere((p) => p.name == name);
+    if (idx < 0) return;
+    final old = _providers[idx];
+    setState(() => _providers.removeAt(idx));
     try {
       await _providerService.deleteProvider(name);
-      setState(() => _providers.removeWhere((p) => p.name == name));
+      _cache.invalidateGroup('providers');
       _showSuccess('$name deleted');
     } catch (e) {
+      setState(() => _providers.insert(idx, old));
       _showError(e.toString());
     }
   }
@@ -379,9 +480,11 @@ class _SettingsScreenState extends State<SettingsScreen>
       final isNew = record.id == null;
       if (isNew) {
         final created = await _providerService.createProvider(record);
+        _cache.invalidateGroup('providers');
         setState(() => _providers.add(created));
       } else {
         final updated = await _providerService.updateProvider(record.name, record);
+        _cache.invalidateGroup('providers');
         setState(() {
           final idx = _providers.indexWhere((p) => p.name == record.name);
           if (idx >= 0) _providers[idx] = updated;
@@ -475,65 +578,67 @@ class _SettingsScreenState extends State<SettingsScreen>
           _buildSidebar(),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : TabBarView(
-                    controller: _tabController,
-                    children: [
-                      ConnectionTab(
-                        apiClient: widget.apiClient,
-                        backendService: widget.backendService,
-                        onDisconnect: widget.onDisconnect,
+                ? const SettingsShimmer()
+                : _error != null && _providers.isEmpty && _agents.isEmpty && _apps.isEmpty
+                    ? ErrorWithRetry(message: _error!, onRetry: _loadAll)
+                    : TabBarView(
+                        controller: _tabController,
+                        children: [
+                          ConnectionTab(
+                            apiClient: widget.apiClient,
+                            backendService: widget.backendService,
+                            onDisconnect: widget.onDisconnect,
+                          ),
+                          ProvidersTab(
+                            providers: _providers,
+                            providerService: _providerService,
+                            onDelete: _deleteProvider,
+                            onEdit: (p) => _openProviderForm(p),
+                            onAdd: () => _openProviderForm(null),
+                            onManageModels: _manageModels,
+                          ),
+                          ModelsTab(
+                            providers: _providers,
+                            providerService: _providerService,
+                            onReload: _loadProviders,
+                          ),
+                          AgentsTab(
+                            agents: _agents,
+                            onDelete: _deleteAgent,
+                            onAdd: _addAgent,
+                            onEditContextWindow: _editContextWindow,
+                            onEditPastActions: _editPastActions,
+                            onToggleField: _updateAgentField,
+                            onLinkModel: _linkModel,
+                            onViewDiary: _viewDiary,
+                          ),
+                          AppsTab(
+                            apiClient: widget.apiClient,
+                            appService: _appService,
+                            agents: _agents,
+                            onRefresh: _loadApps,
+                          ),
+                          NotesTab(
+                            apiClient: widget.apiClient,
+                            agents: _agents,
+                          ),
+                          DiaryTab(
+                            apiClient: widget.apiClient,
+                            agents: _agents,
+                          ),
+                          AlarmsTab(
+                            apiClient: widget.apiClient,
+                            agents: _agents,
+                          ),
+                          TimeTab(
+                            apiClient: widget.apiClient,
+                          ),
+                          SecurityTab(
+                            settingsService: _settingsService,
+                            apiClient: widget.apiClient,
+                          ),
+                        ],
                       ),
-                      ProvidersTab(
-                        providers: _providers,
-                        providerService: _providerService,
-                        onDelete: _deleteProvider,
-                        onEdit: (p) => _openProviderForm(p),
-                        onAdd: () => _openProviderForm(null),
-                        onManageModels: _manageModels,
-                      ),
-                      ModelsTab(
-                        providers: _providers,
-                        providerService: _providerService,
-                        onReload: _loadProviders,
-                      ),
-                      AgentsTab(
-                        agents: _agents,
-                        onDelete: _deleteAgent,
-                        onAdd: _addAgent,
-                        onEditContextWindow: _editContextWindow,
-                        onEditPastActions: _editPastActions,
-                        onToggleField: _updateAgentField,
-                        onLinkModel: _linkModel,
-                        onViewDiary: _viewDiary,
-                      ),
-                      AppsTab(
-                        apiClient: widget.apiClient,
-                        appService: _appService,
-                        agents: _agents,
-                        onRefresh: _loadApps,
-                      ),
-                      NotesTab(
-                        apiClient: widget.apiClient,
-                        agents: _agents,
-                      ),
-                      DiaryTab(
-                        apiClient: widget.apiClient,
-                        agents: _agents,
-                      ),
-                      AlarmsTab(
-                        apiClient: widget.apiClient,
-                        agents: _agents,
-                      ),
-                      TimeTab(
-                        apiClient: widget.apiClient,
-                      ),
-                      SecurityTab(
-                        settingsService: _settingsService,
-                        apiClient: widget.apiClient,
-                      ),
-                    ],
-                  ),
           ),
         ],
       ),

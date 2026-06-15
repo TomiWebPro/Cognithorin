@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../services/api_service/api_client.dart';
 import '../services/api_service/stats_service.dart';
 import '../services/api_service/models.dart';
+import '../services/cache_service.dart';
+import '../reuseable_widgets/error_with_retry.dart';
 
 class StatsScreen extends StatefulWidget {
   final ApiClient apiClient;
@@ -13,6 +15,7 @@ class StatsScreen extends StatefulWidget {
 
 class _StatsScreenState extends State<StatsScreen> {
   late final StatsService _statsService;
+  final DataCache _cache = DataCache.instance;
   String _selectedPeriod = '24h';
   static const _allPeriods = ['1h', '3h', '12h', '24h', '7d', 'all'];
 
@@ -21,6 +24,10 @@ class _StatsScreenState extends State<StatsScreen> {
   List<_AgentStat> _agents = [];
   bool _loading = true;
   String? _error;
+  bool _dataFullyLoaded = false;
+  final Map<String, PeriodTokenUsage> _allTokenData = {};
+  final Map<String, TimingBreakdown> _allTimingData = {};
+  final Map<String, List<_AgentStat>> _allAgentData = {};
 
   @override
   void initState() {
@@ -30,7 +37,15 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (_dataFullyLoaded) {
+      _applyPeriod();
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final tokRes = await _statsService.getTokenUsage(periods: _allPeriods);
       final timRes = await _statsService.getTiming(periods: _allPeriods);
@@ -42,32 +57,36 @@ class _StatsScreenState extends State<StatsScreen> {
       final timPeriods = (timRes['periods'] as Map<String, dynamic>?) ?? {};
       final agentMap = (agentRes['agents'] as Map<String, dynamic>?) ?? {};
 
-      setState(() {
-        _tokenUsage = tokPeriods[_selectedPeriod] != null
-            ? PeriodTokenUsage.fromJson(
-                tokPeriods[_selectedPeriod] as Map<String, dynamic>)
-            : null;
-        _timing = timPeriods[_selectedPeriod] != null
-            ? TimingBreakdown.fromJson(
-                timPeriods[_selectedPeriod] as Map<String, dynamic>)
-            : null;
-        _agents = agentMap.entries.map((e) {
+      for (final period in _allPeriods) {
+        if (tokPeriods[period] != null) {
+          _allTokenData[period] = PeriodTokenUsage.fromJson(
+              tokPeriods[period] as Map<String, dynamic>);
+        }
+        if (timPeriods[period] != null) {
+          _allTimingData[period] = TimingBreakdown.fromJson(
+              timPeriods[period] as Map<String, dynamic>);
+        }
+        _allAgentData[period] = agentMap.entries.map((e) {
           final v = e.value as Map<String, dynamic>;
           return _AgentStat(
             name: v['_name'] as String? ?? e.key,
             agentId: e.key,
-            tokenUsage: v[_selectedPeriod] != null
-                ? PeriodTokenUsage.fromJson(
-                    v[_selectedPeriod] as Map<String, dynamic>)
+            tokenUsage: v[period] != null
+                ? PeriodTokenUsage.fromJson(v[period] as Map<String, dynamic>)
                 : PeriodTokenUsage(),
           );
         }).toList()
-          ..sort(
-              (a, b) => (b.tokenUsage.inputTokens + b.tokenUsage.outputTokens)
+          ..sort((a, b) =>
+              (b.tokenUsage.inputTokens + b.tokenUsage.outputTokens)
                   .compareTo(a.tokenUsage.inputTokens + a.tokenUsage.outputTokens));
-        _loading = false;
-        _error = null;
-      });
+      }
+
+      _cache.set('stats:all', _allTokenData, group: 'stats');
+      _cache.set('stats:timing', _allTimingData, group: 'stats');
+      _cache.set('stats:agents', _allAgentData, group: 'stats');
+
+      _dataFullyLoaded = true;
+      _applyPeriod();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -77,9 +96,22 @@ class _StatsScreenState extends State<StatsScreen> {
     }
   }
 
+  void _applyPeriod() {
+    setState(() {
+      _tokenUsage = _allTokenData[_selectedPeriod];
+      _timing = _allTimingData[_selectedPeriod];
+      _agents = _allAgentData[_selectedPeriod] ?? [];
+      _loading = false;
+    });
+  }
+
   void _selectPeriod(String period) {
     setState(() => _selectedPeriod = period);
-    _load();
+    if (_dataFullyLoaded) {
+      _applyPeriod();
+    } else {
+      _load();
+    }
   }
 
   @override
@@ -91,7 +123,7 @@ class _StatsScreenState extends State<StatsScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? _errorView()
+              ? ErrorWithRetry(message: _error!, onRetry: _load)
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
@@ -108,35 +140,6 @@ class _StatsScreenState extends State<StatsScreen> {
                     ],
                   ),
                 ),
-    );
-  }
-
-  Widget _errorView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.warning_amber_rounded,
-                color: Colors.amber, size: 48),
-            const SizedBox(height: 16),
-            const Text('Failed to load stats',
-                style: TextStyle(fontWeight: FontWeight.w500, fontSize: 16)),
-            const SizedBox(height: 8),
-            Text(_error!,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 13, color: Theme.of(context).colorScheme.error)),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-              onPressed: _load,
-            ),
-          ],
-        ),
-      ),
     );
   }
 

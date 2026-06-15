@@ -4,6 +4,10 @@ import '../services/api_service/agent_service.dart';
 import '../services/api_service/runtime_service.dart';
 import '../services/api_service/models.dart';
 import '../services/backend_service.dart';
+import '../services/cache_service.dart';
+import '../services/data_preloader.dart';
+import '../reuseable_widgets/error_with_retry.dart';
+import '../reuseable_widgets/shimmer_widget.dart';
 import '../settings/settings_screen.dart';
 import 'agent_card.dart';
 import 'stats_screen.dart';
@@ -27,9 +31,11 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late final RuntimeService _runtimeService;
   late final AgentService _agentService;
+  final DataCache _cache = DataCache.instance;
   List<AgentRuntime> _runtimes = [];
   bool _loading = true;
   bool _contextDialogOpen = false;
+  String? _error;
 
   @override
   void initState() {
@@ -37,29 +43,68 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _runtimeService = RuntimeService(widget.apiClient);
     _agentService = AgentService(widget.apiClient);
     _load();
+    _prefetchSettings();
+  }
+
+  Future<void> _prefetchSettings() async {
+    final preloader = DataPreloader(widget.apiClient);
+    await preloader.preloadSettingsData();
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    final cached = _cache.get<List<AgentRuntime>>('dashboard:runtimes');
+    if (cached != null) {
+      setState(() {
+        _runtimes = cached;
+        _loading = false;
+      });
+      _refreshInBackground();
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final runtimes = await _runtimeService.getAllRuntimes();
+      _cache.set('dashboard:runtimes', runtimes, group: 'runtimes');
       if (!mounted) return;
       setState(() {
         _runtimes = runtimes;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
     }
   }
 
+  Future<void> _refreshInBackground() async {
+    try {
+      final runtimes = await _runtimeService.getAllRuntimes();
+      _cache.set('dashboard:runtimes', runtimes, group: 'runtimes');
+      if (mounted) setState(() => _runtimes = runtimes);
+    } catch (_) {}
+  }
+
   Future<void> _togglePause(String agentId, bool paused) async {
+    final idx = _runtimes.indexWhere((r) => r.agent.agentId == agentId);
+    if (idx < 0) return;
+    final oldStatus = _runtimes[idx].agent.status;
+
+    setState(() {
+      _runtimes[idx].agent.status = paused ? 'paused' : 'active';
+    });
+
     try {
       await _agentService.updateAgent(agentId, {
         'status': paused ? 'paused' : 'active',
       });
-      await _load();
+      _cache.invalidate('dashboard:runtimes');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -68,6 +113,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     } catch (e) {
+      setState(() {
+        _runtimes[idx].agent.status = oldStatus;
+      });
       if (!mounted) return;
       showDialog(
         context: context,
@@ -214,47 +262,52 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _runtimes.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.smart_toy_outlined,
-                          size: 64, color: Theme.of(context).colorScheme.outline),
-                      const SizedBox(height: 16),
-                      Text('No agents configured',
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 8),
-                      Text('Create agents in Settings to get started',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                              )),
-                      const SizedBox(height: 16),
-                      FilledButton.icon(
-                        icon: const Icon(Icons.settings),
-                        label: const Text('Open Settings'),
-                        onPressed: _openSettings,
-                      ),
-                    ],
-                  ),
+          ? const DashboardShimmer()
+          : _error != null
+              ? ErrorWithRetry(
+                  message: _error!,
+                  onRetry: _load,
                 )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.only(top: 8, bottom: 24),
-                    itemCount: _runtimes.length,
-                    itemBuilder: (context, index) {
-                      final r = _runtimes[index];
-                      return AgentCard(
-                        runtime: r,
-                        onTogglePause: _togglePause,
-                        onTap: () => _showAgentDetail(r),
-                        onViewContext: () => _viewContext(r),
-                      );
-                    },
-                  ),
-                ),
+              : _runtimes.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.smart_toy_outlined,
+                              size: 64, color: Theme.of(context).colorScheme.outline),
+                          const SizedBox(height: 16),
+                          Text('No agents configured',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 8),
+                          Text('Create agents in Settings to get started',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                  )),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            icon: const Icon(Icons.settings),
+                            label: const Text('Open Settings'),
+                            onPressed: _openSettings,
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.only(top: 8, bottom: 24),
+                        itemCount: _runtimes.length,
+                        itemBuilder: (context, index) {
+                          final r = _runtimes[index];
+                          return AgentCard(
+                            runtime: r,
+                            onTogglePause: _togglePause,
+                            onTap: () => _showAgentDetail(r),
+                            onViewContext: () => _viewContext(r),
+                          );
+                        },
+                      ),
+                    ),
     );
   }
 }
@@ -350,27 +403,15 @@ class _AgentContextDialogState extends State<_AgentContextDialog> {
                     ),
                   )
                 : _error != null
-                    ? Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 36),
-                            const SizedBox(height: 12),
-                            const Text('Failed to load context',
-                                style: TextStyle(fontWeight: FontWeight.w500)),
-                            const SizedBox(height: 8),
-                            Text(_error!,
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: Theme.of(context).colorScheme.error)),
-                            const SizedBox(height: 16),
-                            FilledButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Close'),
-                            ),
-                          ],
-                        ),
+                    ? ErrorWithRetry(
+                        message: _error!,
+                        onRetry: () {
+                          setState(() {
+                            _loading = true;
+                            _error = null;
+                          });
+                          _load();
+                        },
                       )
                     : _content!.isEmpty
                         ? const Center(child: Text('Context is empty'))

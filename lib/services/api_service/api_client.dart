@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../encryption_service.dart';
+import '../cancel_token.dart';
 
 class ApiException implements Exception {
   final int statusCode;
@@ -73,24 +74,29 @@ class ApiClient {
   Future<Map<String, dynamic>> postRaw(
     String path, {
     Map<String, dynamic>? body,
+    CancelToken? cancelToken,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final headers = <String, String>{
       'Content-Type': 'application/json',
     };
-    final response = await http
-        .post(
-          uri,
-          headers: headers,
-          body: body != null ? jsonEncode(body) : null,
-        )
-        .timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http
+          .post(
+            uri,
+            headers: headers,
+            body: body != null ? jsonEncode(body) : null,
+          )
+          .timeout(_timeout),
+      cancelToken,
+    );
     return _handleResponse(response);
   }
 
   Future<Map<String, dynamic>> get(
     String path, {
     Map<String, String>? queryParams,
+    CancelToken? cancelToken,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -100,29 +106,37 @@ class ApiClient {
     }
     final uri =
         Uri.parse('$_baseUrl$path').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers).timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http.get(uri, headers: headers).timeout(_timeout),
+      cancelToken,
+    );
     return _decryptResponse(response);
   }
 
   Future<Map<String, dynamic>> post(
     String path, {
     Map<String, dynamic>? body,
+    CancelToken? cancelToken,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final requestBody = body != null ? _encryptBody(body) : null;
-    final response = await http
-        .post(
-          uri,
-          headers: _headers,
-          body: requestBody != null ? jsonEncode(requestBody) : null,
-        )
-        .timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http
+          .post(
+            uri,
+            headers: _headers,
+            body: requestBody != null ? jsonEncode(requestBody) : null,
+          )
+          .timeout(_timeout),
+      cancelToken,
+    );
     return _decryptResponse(response);
   }
 
   Future<Map<String, dynamic>> postForm(
     String path, {
     required Map<String, String> fields,
+    CancelToken? cancelToken,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final headers = <String, String>{
@@ -131,33 +145,43 @@ class ApiClient {
     if (_token != null) {
       headers['Authorization'] = 'Bearer $_token';
     }
-    final response = await http
-        .post(
-          uri,
-          headers: headers,
-          body: fields,
-        )
-        .timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http
+          .post(
+            uri,
+            headers: headers,
+            body: fields,
+          )
+          .timeout(_timeout),
+      cancelToken,
+    );
     return _decryptResponse(response);
   }
 
   Future<Map<String, dynamic>> put(
     String path, {
     Map<String, dynamic>? body,
+    CancelToken? cancelToken,
   }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final requestBody = body != null ? _encryptBody(body) : null;
-    final response = await http
-        .put(
-          uri,
-          headers: _headers,
-          body: requestBody != null ? jsonEncode(requestBody) : null,
-        )
-        .timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http
+          .put(
+            uri,
+            headers: _headers,
+            body: requestBody != null ? jsonEncode(requestBody) : null,
+          )
+          .timeout(_timeout),
+      cancelToken,
+    );
     return _decryptResponse(response);
   }
 
-  Future<Map<String, dynamic>> delete(String path) async {
+  Future<Map<String, dynamic>> delete(
+    String path, {
+    CancelToken? cancelToken,
+  }) async {
     final uri = Uri.parse('$_baseUrl$path');
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -165,9 +189,31 @@ class ApiClient {
     if (_token != null) {
       headers['Authorization'] = 'Bearer $_token';
     }
-    final response =
-        await http.delete(uri, headers: headers).timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http.delete(uri, headers: headers).timeout(_timeout),
+      cancelToken,
+    );
     return _decryptResponse(response);
+  }
+
+  Future<http.Response> _httpWithCancel(
+    Future<http.Response> Function() request,
+    CancelToken? cancelToken,
+  ) async {
+    if (cancelToken == null) return request();
+    if (cancelToken.isCancelled) throw CancelledException();
+    final completer = Completer<http.Response>();
+    cancelToken.addCancelCallback(() {
+      if (!completer.isCompleted) {
+        completer.completeError(CancelledException());
+      }
+    });
+    request().then((r) {
+      if (!completer.isCompleted) completer.complete(r);
+    }).catchError((e) {
+      if (!completer.isCompleted) completer.completeError(e);
+    });
+    return completer.future;
   }
 
   Map<String, dynamic> _handleResponse(http.Response response) {
@@ -195,6 +241,7 @@ class ApiClient {
   Future<List<dynamic>> getList(
     String path, {
     Map<String, String>? queryParams,
+    CancelToken? cancelToken,
   }) async {
     final headers = <String, String>{
       'Content-Type': 'application/json',
@@ -204,7 +251,10 @@ class ApiClient {
     }
     final uri =
         Uri.parse('$_baseUrl$path').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers).timeout(_timeout);
+    final response = await _httpWithCancel(
+      () => http.get(uri, headers: headers).timeout(_timeout),
+      cancelToken,
+    );
 
     if (_derivedKey == null || response.body.isEmpty) {
       return _handleListResponse(response);

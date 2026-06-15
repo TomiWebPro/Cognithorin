@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'services/api_service/api_client.dart';
 import 'services/backend_service.dart';
+import 'services/data_preloader.dart';
 import 'onboarding_screens/connect_screen.dart';
 import 'reuseable_widgets/setup_dialog.dart';
 import 'dashboard/dashboard_screen.dart';
@@ -48,6 +49,7 @@ class _MyAppState extends State<MyApp> {
           _backendService.startMonitoring();
           if (!mounted) return;
           setState(() => _ready = true);
+          _prefetchDashboard();
           return;
         }
       } else {
@@ -61,6 +63,12 @@ class _MyAppState extends State<MyApp> {
     setState(() => _ready = true);
   }
 
+  Future<void> _prefetchDashboard() async {
+    final preloader = DataPreloader(_apiClient);
+    await preloader.preloadDashboardData();
+    await preloader.preloadSettingsData();
+  }
+
   void _onConnected() {
     final url = _backendService.currentUrl;
     if (url == null) return;
@@ -71,6 +79,7 @@ class _MyAppState extends State<MyApp> {
       _apiClient.setToken(token);
     }
     _backendService.startMonitoring();
+    _prefetchDashboard();
     if (!mounted) return;
     setState(() {});
   }

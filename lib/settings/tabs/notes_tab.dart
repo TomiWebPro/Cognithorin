@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service/api_client.dart';
 import '../../services/api_service/models.dart';
+import '../../services/cancel_token.dart';
 
 class NotesTab extends StatefulWidget {
   final ApiClient apiClient;
@@ -20,6 +21,7 @@ class _NotesTabState extends State<NotesTab> {
   String? _selectedAgentId;
   List<Map<String, dynamic>> _notes = [];
   bool _loading = false;
+  CancelToken? _cancelToken;
 
   @override
   void initState() {
@@ -30,11 +32,22 @@ class _NotesTabState extends State<NotesTab> {
     }
   }
 
+  @override
+  void dispose() {
+    _cancelToken?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadNotes() async {
     if (_selectedAgentId == null) return;
-    setState(() => _loading = true);
+    _cancelToken?.cancel();
+    _cancelToken = CancelToken();
+    if (!_loading) setState(() => _loading = true);
     try {
-      final data = await widget.apiClient.get('/agents/$_selectedAgentId/notes');
+      final data = await widget.apiClient.get(
+        '/agents/$_selectedAgentId/notes',
+        cancelToken: _cancelToken,
+      );
       final notes = (data['notes'] as List<dynamic>?)
               ?.map((e) => e as Map<String, dynamic>)
               .toList() ??
@@ -45,7 +58,9 @@ class _NotesTabState extends State<NotesTab> {
         _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _cancelToken?.isCancelled != true) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -83,6 +98,14 @@ class _NotesTabState extends State<NotesTab> {
           FilledButton(
             onPressed: () async {
               Navigator.pop(ctx);
+              final tempNote = <String, dynamic>{
+                'id': '__temp_${DateTime.now().millisecondsSinceEpoch}',
+                'title': titleCtrl.text,
+                'content': contentCtrl.text,
+                'max_interactions': int.tryParse(maxIntCtrl.text) ?? 10,
+                'interaction_count': 0,
+              };
+              setState(() => _notes.insert(0, tempNote));
               try {
                 await widget.apiClient.post('/agents/$_selectedAgentId/notes', body: {
                   'title': titleCtrl.text,
@@ -91,6 +114,7 @@ class _NotesTabState extends State<NotesTab> {
                 });
                 _loadNotes();
               } catch (e) {
+                setState(() => _notes.removeWhere((n) => n['id'] == tempNote['id']));
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text(e.toString())));
@@ -132,12 +156,17 @@ class _NotesTabState extends State<NotesTab> {
           FilledButton(
             onPressed: () async {
               Navigator.pop(ctx);
+              final oldContent = note['content'];
+              note['content'] = contentCtrl.text;
+              setState(() {});
               try {
                 await widget.apiClient.put('/notes/${note['id']}', body: {
                   'content': contentCtrl.text,
                 });
                 _loadNotes();
               } catch (e) {
+                note['content'] = oldContent;
+                setState(() {});
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text(e.toString())));
@@ -152,10 +181,16 @@ class _NotesTabState extends State<NotesTab> {
   }
 
   Future<void> _deleteNote(String noteId) async {
+    final idx = _notes.indexWhere((n) => n['id'] == noteId);
+    if (idx < 0) return;
+    final removed = _notes.removeAt(idx);
+    setState(() {});
     try {
       await widget.apiClient.delete('/notes/$noteId');
       _loadNotes();
     } catch (e) {
+      _notes.insert(idx, removed);
+      setState(() {});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
@@ -197,24 +232,28 @@ class _NotesTabState extends State<NotesTab> {
                           itemCount: _notes.length,
                           itemBuilder: (context, index) {
                             final note = _notes[index];
-                            return Card(
-                              child: ListTile(
-                                title: Text(note['title'] as String? ?? '',
-                                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                                subtitle: Text(
-                                  '${(note['content'] as String? ?? '').substring(0, ((note['content'] as String?)?.length ?? 0).clamp(0, 80))}${((note['content'] as String?)?.length ?? 0) > 80 ? '...' : ''}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                        icon: const Icon(Icons.edit, size: 18),
-                                        onPressed: () => _viewNote(note)),
-                                    IconButton(
-                                        icon: const Icon(Icons.delete, size: 18, color: Colors.red),
-                                        onPressed: () => _deleteNote(note['id'] as String)),
-                                  ],
+                            final isTemp = (note['id'] as String?)?.startsWith('__temp') ?? false;
+                            return Opacity(
+                              opacity: isTemp ? 0.6 : 1.0,
+                              child: Card(
+                                child: ListTile(
+                                  title: Text(note['title'] as String? ?? '',
+                                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  subtitle: Text(
+                                    '${(note['content'] as String? ?? '').substring(0, ((note['content'] as String?)?.length ?? 0).clamp(0, 80))}${((note['content'] as String?)?.length ?? 0) > 80 ? '...' : ''}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                          icon: const Icon(Icons.edit, size: 18),
+                                          onPressed: () => _viewNote(note)),
+                                      IconButton(
+                                          icon: const Icon(Icons.delete, size: 18, color: Colors.red),
+                                          onPressed: () => _deleteNote(note['id'] as String)),
+                                    ],
+                                  ),
                                 ),
                               ),
                             );

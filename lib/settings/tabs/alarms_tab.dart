@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../services/api_service/api_client.dart';
 import '../../services/api_service/models.dart';
+import '../../services/cancel_token.dart';
 
 class AlarmsTab extends StatefulWidget {
   final ApiClient apiClient;
@@ -20,6 +21,7 @@ class _AlarmsTabState extends State<AlarmsTab> {
   String? _selectedAgentId;
   List<Map<String, dynamic>> _alarms = [];
   bool _loading = false;
+  CancelToken? _cancelToken;
 
   @override
   void initState() {
@@ -30,11 +32,22 @@ class _AlarmsTabState extends State<AlarmsTab> {
     }
   }
 
+  @override
+  void dispose() {
+    _cancelToken?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadAlarms() async {
     if (_selectedAgentId == null) return;
-    setState(() => _loading = true);
+    _cancelToken?.cancel();
+    _cancelToken = CancelToken();
+    if (!_loading) setState(() => _loading = true);
     try {
-      final data = await widget.apiClient.get('/agents/$_selectedAgentId/alarms');
+      final data = await widget.apiClient.get(
+        '/agents/$_selectedAgentId/alarms',
+        cancelToken: _cancelToken,
+      );
       final alarms = (data['alarms'] as List<dynamic>?)
               ?.map((e) => e as Map<String, dynamic>)
               .toList() ??
@@ -45,7 +58,9 @@ class _AlarmsTabState extends State<AlarmsTab> {
         _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && _cancelToken?.isCancelled != true) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -88,6 +103,15 @@ class _AlarmsTabState extends State<AlarmsTab> {
           FilledButton(
             onPressed: () async {
               Navigator.pop(ctx);
+              final tempId = '__temp_${DateTime.now().millisecondsSinceEpoch}';
+              final tempAlarm = <String, dynamic>{
+                'id': tempId,
+                'message': msgCtrl.text,
+                'alarm_time': timeCtrl.text,
+                'time_type': timeType,
+                'triggered': false,
+              };
+              setState(() => _alarms.insert(0, tempAlarm));
               try {
                 await widget.apiClient.post('/agents/$_selectedAgentId/alarms', body: {
                   'time': timeCtrl.text,
@@ -96,6 +120,7 @@ class _AlarmsTabState extends State<AlarmsTab> {
                 });
                 _loadAlarms();
               } catch (e) {
+                setState(() => _alarms.removeWhere((a) => a['id'] == tempId));
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(content: Text(e.toString())));
@@ -110,10 +135,16 @@ class _AlarmsTabState extends State<AlarmsTab> {
   }
 
   Future<void> _cancelAlarm(String alarmId) async {
+    final idx = _alarms.indexWhere((a) => a['id'] == alarmId);
+    if (idx < 0) return;
+    final removed = _alarms.removeAt(idx);
+    setState(() {});
     try {
       await widget.apiClient.delete('/alarms/$alarmId');
       _loadAlarms();
     } catch (e) {
+      _alarms.insert(idx, removed);
+      setState(() {});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
       }
@@ -157,9 +188,12 @@ class _AlarmsTabState extends State<AlarmsTab> {
                           itemBuilder: (context, index) {
                             final alarm = _alarms[index];
                             final triggered = alarm['triggered'] == true;
-                            return Card(
-                              child: ListTile(
-                                leading: Icon(
+                            final isTemp = (alarm['id'] as String?)?.startsWith('__temp') ?? false;
+                            return Opacity(
+                              opacity: isTemp ? 0.6 : 1.0,
+                              child: Card(
+                                child: ListTile(
+                                  leading: Icon(
                                   triggered ? Icons.alarm_off : Icons.alarm,
                                   color: triggered ? Colors.grey : Colors.orange,
                                 ),
@@ -176,13 +210,14 @@ class _AlarmsTabState extends State<AlarmsTab> {
                                         icon: const Icon(Icons.cancel, color: Colors.red),
                                         onPressed: () => _cancelAlarm(alarm['id'] as String),
                                       ),
+                                ),
                               ),
                             );
                           },
                         ),
-            ),
-          ],
-        ),
+             ),
+           ],
+         ),
         Positioned(
           right: 16,
           bottom: 16,

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../../services/api_service/api_client.dart';
 import '../../services/api_service/app_service.dart';
 import '../../services/api_service/models.dart';
+import '../../services/cache_service.dart';
+import '../../reuseable_widgets/shimmer_widget.dart';
 
 class AppsTab extends StatefulWidget {
   final ApiClient apiClient;
@@ -24,6 +26,7 @@ class AppsTab extends StatefulWidget {
 }
 
 class _AppsTabState extends State<AppsTab> {
+  final DataCache _cache = DataCache.instance;
   List<AppRecord> _apps = [];
   Map<String, List<AgentAppRecord>> _agentApps = {};
   bool _loading = true;
@@ -32,7 +35,18 @@ class _AppsTabState extends State<AppsTab> {
   @override
   void initState() {
     super.initState();
+    _tryLoadFromCache();
     _fullLoad();
+  }
+
+  void _tryLoadFromCache() {
+    final cachedApps = _cache.get<List<AppRecord>>('apps:all');
+    if (cachedApps != null) {
+      setState(() {
+        _apps = cachedApps;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _fullLoad() async {
@@ -52,14 +66,21 @@ class _AppsTabState extends State<AppsTab> {
 
   Future<void> _refreshData() async {
     final apps = await widget.appService.getApps(all: true);
+    _cache.set('apps:all', apps, group: 'apps');
+
     final agentApps = <String, List<AgentAppRecord>>{};
+    final futures = <Future<void>>[];
     for (final agent in widget.agents) {
-      try {
-        agentApps[agent.agentId] = await widget.appService.getAgentApps(agent.agentId);
-      } catch (_) {
-        agentApps[agent.agentId] = [];
-      }
+      futures.add(() async {
+        try {
+          agentApps[agent.agentId] = await widget.appService.getAgentApps(agent.agentId);
+        } catch (_) {
+          agentApps[agent.agentId] = [];
+        }
+      }());
     }
+    await Future.wait(futures);
+
     if (!mounted) return;
     setState(() {
       _apps = apps;
@@ -113,13 +134,13 @@ class _AppsTabState extends State<AppsTab> {
               _detailRow('Available', app.isAvailable ? 'Yes' : 'No'),
               _detailRow('Requires Confirm', app.requiresConfirmation ? 'Yes' : 'No'),
               _detailRow('Timeout', '${app.timeoutSeconds}s'),
-              _detailRow('Directory', app.directory ?? '—'),
+              _detailRow('Directory', app.directory ?? '\u2014'),
               if (params.isNotEmpty) ...[
                 const Divider(),
                 Text('Parameters (${params.length})',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 ...params.map((p) => Text(
-                      '  ${p['name']} (${p['type']})${p['required'] == true ? ' *' : ''} — ${p['description'] ?? ''}',
+                      '  ${p['name']} (${p['type']})${p['required'] == true ? ' *' : ''} \u2014 ${p['description'] ?? ''}',
                       style: const TextStyle(fontSize: 12),
                     )),
               ],
@@ -128,7 +149,7 @@ class _AppsTabState extends State<AppsTab> {
                 Text('Outputs (${outputs.length})',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 ...outputs.map((o) => Text(
-                      '  ${o['name']} (${o['type']}) — ${o['description'] ?? ''}',
+                      '  ${o['name']} (${o['type']}) \u2014 ${o['description'] ?? ''}',
                       style: const TextStyle(fontSize: 12),
                     )),
               ],
@@ -137,7 +158,7 @@ class _AppsTabState extends State<AppsTab> {
                 Text('Config Schema (${configSchema.length})',
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                 ...configSchema.map((c) => Text(
-                      '  ${c['name']} (${c['type']})${c['required'] == true ? ' *' : ''} — ${c['description'] ?? ''}',
+                      '  ${c['name']} (${c['type']})${c['required'] == true ? ' *' : ''} \u2014 ${c['description'] ?? ''}',
                       style: const TextStyle(fontSize: 12),
                     )),
               ],
@@ -276,7 +297,22 @@ class _AppsTabState extends State<AppsTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading && _apps.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          children: [
+            ShimmerWidget(height: 14, borderRadius: 4),
+            SizedBox(height: 16),
+            ShimmerWidget(height: 120, borderRadius: 12),
+            SizedBox(height: 8),
+            ShimmerWidget(height: 120, borderRadius: 12),
+            SizedBox(height: 8),
+            ShimmerWidget(height: 120, borderRadius: 12),
+          ],
+        ),
+      );
+    }
 
     if (_apps.isEmpty) {
       return Center(
@@ -355,6 +391,8 @@ class _AppsTabState extends State<AppsTab> {
                                 ? installedList.first
                                 : null;
                             final isEnabled = installed?.isEnabled ?? false;
+                            final toggleKey = '${agent.agentId}:${app.appId}';
+                            final isToggling = _togglingApps.contains(toggleKey);
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 4),
                               child: Row(
@@ -374,11 +412,15 @@ class _AppsTabState extends State<AppsTab> {
                                   if (installed != null) ...[
                                     SizedBox(
                                       height: 32,
-                                      child: Switch(
-                                        value: isEnabled,
-                                        onChanged: (_) => _toggleApp(agent.agentId, app.appId, isEnabled),
-                                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      ),
+                                      child: isToggling
+                                          ? const SizedBox(
+                                              width: 20, height: 20,
+                                              child: CircularProgressIndicator(strokeWidth: 2))
+                                          : Switch(
+                                              value: isEnabled,
+                                              onChanged: (_) => _toggleApp(agent.agentId, app.appId, isEnabled),
+                                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
                                     ),
                                     IconButton(
                                       icon: const Icon(Icons.settings, size: 18),
@@ -435,11 +477,19 @@ class _AppsTabState extends State<AppsTab> {
   }
 
   Future<void> _uninstallApp(String agentId, String appId) async {
+    final agentApps = _agentApps[agentId];
+    if (agentApps == null) return;
+    final idx = agentApps.indexWhere((a) => a.appId == appId);
+    if (idx < 0) return;
+    final removed = agentApps.removeAt(idx);
+    if (mounted) setState(() {});
     try {
       await widget.appService.uninstallApp(agentId, appId);
       _showSuccess('App uninstalled');
       _backgroundRefresh();
     } catch (e) {
+      agentApps.insert(idx, removed);
+      if (mounted) setState(() {});
       _showError(e.toString());
     }
   }
